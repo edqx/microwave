@@ -1,0 +1,11 @@
+.{
+    .name = .microwave,
+    .fingerprint = 0x9817a1761939877b,
+    .version = "0.1.0",
+    .dependencies = .{},
+    .paths = .{
+        "src",
+        "build.zig",
+        "build.zig.zon",
+    },
+}
