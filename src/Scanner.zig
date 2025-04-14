@@ -9,7 +9,17 @@ pub const Token = struct {
         ignored,
         comment,
         key,
-        value,
+        literal_string,
+        literal_base_integer,
+        literal_integer,
+        literal_float,
+        literal_inf,
+        literal_nan,
+        literal_bool,
+        literal_offset_date_time,
+        literal_local_date_time,
+        literal_local_date,
+        literal_local_time,
         access,
         array_start,
         array_end,
@@ -79,8 +89,88 @@ fn isKeyChar(b: u8) bool {
     };
 }
 
+fn isUtcChar(b: u8) bool {
+    return b == 'Z';
+}
+
+fn isDateSeparator(b: u8) bool {
+    return b == '-';
+}
+
+fn isTimeSeparator(b: u8) bool {
+    return b == ':';
+}
+
+fn isDateTimeSeparator(b: u8) bool {
+    return switch (b) {
+        ' ', 'T' => true,
+        else => false,
+    };
+}
+
+fn isNumberSign(b: u8) bool {
+    return switch (b) {
+        '+', '-' => true,
+        else => false,
+    };
+}
+
+fn isBaseSignifierPrefix(b: u8) bool {
+    return b == '0';
+}
+
+fn isBase10Digit(b: u8) bool {
+    return switch (b) {
+        '0'...'9' => true,
+        else => false,
+    };
+}
+
+fn isBase16Digit(b: u8) bool {
+    return switch (b) {
+        '0'...'9', 'a'...'f', 'A'...'F' => true,
+        else => false,
+    };
+}
+
+fn isBase8Digit(b: u8) bool {
+    return switch (b) {
+        '0'...'7' => true,
+        else => false,
+    };
+}
+
+fn isBase2Digit(b: u8) bool {
+    return switch (b) {
+        '0', '1' => true,
+        else => false,
+    };
+}
+
+fn isUnsignedIntegerBase(b: u8) bool {
+    return switch (b) {
+        'x', 'o', 'b' => true,
+        else => false,
+    };
+}
+
+fn isDigitGrouper(b: u8) bool {
+    return b == '_';
+}
+
+fn isFractionalSeparator(b: u8) bool {
+    return b == '.';
+}
+
+fn isExponentialSeparator(b: u8) bool {
+    return b == 'e';
+}
+
 fn isStringChar(b: u8) bool {
-    return b == '"' or b == '\'';
+    return switch (b) {
+        '"', '\'' => true,
+        else => false,
+    };
 }
 
 fn isEqualsChar(b: u8) bool {
@@ -189,6 +279,15 @@ fn consumeMany(self: *Scanner, predicate: fn (char: u8) bool) !?Token.Range {
     return range;
 }
 
+fn consumeSlice(self: *Scanner, slice: []const u8) !?Token.Range {
+    if (!std.mem.eql(u8, try self.peekMany(slice.len), slice)) return null;
+    defer self.cursor += slice.len;
+    return .{
+        .start = self.cursor,
+        .end = self.cursor + slice.len,
+    };
+}
+
 fn consumeCommentLine(self: *Scanner) !?Token.Range {
     if (try self.consumeSingle(isCommentChar) == null) return null;
     return try self.consumeMany(isNotNewlineChar);
@@ -225,6 +324,101 @@ fn consumeKeyPart(self: *Scanner) !?Token.Range {
         if (try self.consumeSingle(isStringChar) == null) return null;
         break :string_key try self.consumeString(.single_line);
     };
+}
+
+fn consumeDigitGroups(self: *Scanner, digit_predicate: fn (b: u8) bool) !?Token.Range {
+    var digits_range = try self.consumeSingle(digit_predicate) orelse return null;
+    while (true) {
+        const expect_digit = try self.consumeSingle(isDigitGrouper) != null;
+        const another_digit_range = try self.consumeSingle(digit_predicate) orelse
+            if (expect_digit) return Error.UnexpectedToken else break;
+        digits_range = digits_range.expand(another_digit_range);
+    }
+    return digits_range;
+}
+
+fn consumeUnsignedIntegerBaseNumber(self: *Scanner) !?Token.Range {
+    if (try self.consumeSingle(isBaseSignifierPrefix) == null) return null;
+    const base_range = try self.consumeSingle(isUnsignedIntegerBase) orelse return null;
+    const base = self.buffer[base_range.start];
+    const digits_range = switch (base) {
+        'x' => try self.consumeDigitGroups(isBase16Digit),
+        'o' => try self.consumeDigitGroups(isBase8Digit),
+        'b' => try self.consumeDigitGroups(isBase2Digit),
+        else => unreachable,
+    } orelse return Error.UnexpectedToken;
+    return base_range.expand(digits_range);
+}
+
+fn consumeDate(self: *Scanner) !?Token.Range {
+    const year_range = try self.consumeMany(isBase10Digit) orelse return null;
+    if (try self.consumeSingle(isDateSeparator) == null) return null;
+    const month_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
+    if (try self.consumeSingle(isDateSeparator) == null) return Error.UnexpectedToken;
+    const day_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
+    _ = month_range;
+    return year_range.expand(day_range);
+}
+
+fn consumeTime(self: *Scanner) !?Token.Range {
+    const hour_range = try self.consumeMany(isBase10Digit) orelse return null;
+    if (try self.consumeSingle(isTimeSeparator) == null) return null;
+    const minute_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
+    if (try self.consumeSingle(isTimeSeparator) == null) return Error.UnexpectedToken;
+    const second_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
+    if (try self.consumeSingle(isFractionalSeparator)) |_| {
+        const millisecond_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
+        return hour_range.expand(millisecond_range);
+    }
+    _ = minute_range;
+    return hour_range.expand(second_range);
+}
+
+fn consumeOffset(self: *Scanner) !?Token.Range {
+    if (try self.consumeSingle(isUtcChar)) |range| return range;
+    const sign_range = try self.consumeSingle(isNumberSign) orelse return null;
+    const hour_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
+    if (try self.consumeSingle(isTimeSeparator) == null) return Error.UnexpectedToken;
+    const minute_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
+    _ = hour_range;
+    return sign_range.expand(minute_range);
+}
+
+fn consumeDateTimeLiteralToken(self: *Scanner) !?Token {
+    if (try self.consumeDate()) |date_range| {
+        if (try self.consumeSingle(isDateTimeSeparator)) |_| {
+            const time_range = try self.consumeTime() orelse return Error.UnexpectedToken;
+            if (try self.consumeOffset()) |offset_range| {
+                return date_range.expand(offset_range).token(.literal_offset_date_time);
+            }
+            return date_range.expand(time_range).token(.literal_local_date_time);
+        }
+        return date_range.token(.literal_local_date);
+    }
+    const time_range = try self.consumeTime() orelse return null;
+    return time_range.token(.literal_local_time);
+}
+
+fn consumeNumberLiteralToken(self: *Scanner) !?Token {
+    const sign_range = try self.consumeSingle(isNumberSign);
+    if (sign_range == null) {
+        if (try self.consumeUnsignedIntegerBaseNumber()) |range| return range.token(.literal_base_integer);
+    }
+    const digits_range = try self.consumeDigitGroups(isBase10Digit) orelse
+        return if (sign_range != null) Error.UnexpectedToken else null;
+
+    const integer_part_range = if (sign_range) |range| range.expand(digits_range) else digits_range;
+
+    if (try self.consumeSingle(isFractionalSeparator) != null) {
+        const fraction_digits = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
+        if (try self.consumeSingle(isExponentialSeparator) != null) {
+            _ = try self.consumeSingle(isNumberSign);
+            const exponential_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
+            return integer_part_range.expand(exponential_range).token(.literal_float);
+        }
+        return integer_part_range.expand(fraction_digits).token(.literal_float);
+    }
+    return integer_part_range.token(.literal_integer);
 }
 
 fn statefulConsumeTableClose(self: *Scanner) !?Token.Range {
@@ -299,17 +493,40 @@ pub fn next(self: *Scanner) !?Token {
                 return try self.next();
             }
 
-            if (std.mem.eql(u8, try self.peekMany(3), "\"\"\"")) {
-                self.cursor += 3;
+            if (try self.consumeSlice("\"\"\"") != null) {
                 const string_range = try self.consumeString(.multiple_lines);
-                return string_range.token(.value);
-            } else if (try self.consumeSingle(isStringChar) != null) {
-                const string_range = try self.consumeString(.single_line);
-                return string_range.token(.value);
+                return string_range.token(.literal_string);
             }
 
-            const full_value_range = try self.consumeMany(isNotWhitespaceChar) orelse return Error.UnexpectedToken;
-            return full_value_range.token(.value);
+            if (try self.consumeSingle(isStringChar) != null) {
+                const string_range = try self.consumeString(.single_line);
+                return string_range.token(.literal_string);
+            }
+
+            if (try self.consumeDateTimeLiteralToken()) |datetime_token| {
+                return datetime_token;
+            }
+
+            if (try self.consumeNumberLiteralToken()) |number_token| {
+                return number_token;
+            }
+
+            if (try self.consumeSlice("inf")) |range| {
+                return range.token(.literal_inf);
+            }
+
+            if (try self.consumeSlice("nan") orelse
+                try self.consumeSlice("+nan") orelse
+                try self.consumeSlice("-nan")) |range|
+            {
+                return range.token(.literal_nan);
+            }
+
+            if (try self.consumeSlice("true") orelse try self.consumeSlice("false")) |range| {
+                return range.token(.literal_bool);
+            }
+
+            return Error.UnexpectedToken;
         },
         .expect_table_key, .expect_many_table_key => |original_state| {
             if (try self.consumeMany(isSpaceChar)) |range| return range.token(.ignored);
@@ -383,27 +600,27 @@ fn testAnyScanner(scanner: anytype) !void {
     try expectToken(try scanner.next(), .comment);
     try expectToken(try scanner.next(), .ignored);
     try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .value);
+    try expectToken(try scanner.next(), .literal_string);
     try expectToken(try scanner.next(), .ignored);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .array_start);
-    try expectToken(try scanner.next(), .value);
-    try expectToken(try scanner.next(), .value);
+    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.next(), .literal_string);
     try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .value);
+    try expectToken(try scanner.next(), .literal_string);
     try expectToken(try scanner.next(), .array_end);
 
     try expectToken(try scanner.next(), .ignored);
     try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .value);
+    try expectToken(try scanner.next(), .literal_string);
     try expectToken(try scanner.next(), .ignored);
     try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .value);
+    try expectToken(try scanner.next(), .literal_string);
     try expectToken(try scanner.next(), .ignored);
     try expectToken(try scanner.next(), .comment);
     try expectToken(try scanner.next(), .ignored);
     try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .value);
+    try expectToken(try scanner.next(), .literal_string);
 
     try expectToken(try scanner.next(), .ignored);
     try expectToken(try scanner.next(), .many_table_start);
@@ -411,10 +628,10 @@ fn testAnyScanner(scanner: anytype) !void {
     try expectToken(try scanner.next(), .many_table_end);
     try expectToken(try scanner.next(), .ignored);
     try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .value);
+    try expectToken(try scanner.next(), .literal_string);
     try expectToken(try scanner.next(), .ignored);
     try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .value);
+    try expectToken(try scanner.next(), .literal_string);
 
     try expectToken(try scanner.next(), .ignored);
     try expectToken(try scanner.next(), .many_table_start);
@@ -422,14 +639,14 @@ fn testAnyScanner(scanner: anytype) !void {
     try expectToken(try scanner.next(), .many_table_end);
     try expectToken(try scanner.next(), .ignored);
     try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .value);
+    try expectToken(try scanner.next(), .literal_string);
     try expectToken(try scanner.next(), .ignored);
     try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .value);
+    try expectToken(try scanner.next(), .literal_string);
     try expectToken(try scanner.next(), .ignored);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .array_start);
-    try expectToken(try scanner.next(), .value);
+    try expectToken(try scanner.next(), .literal_string);
     try expectToken(try scanner.next(), .array_end);
 
     try expectToken(try scanner.next(), .ignored);
@@ -438,10 +655,10 @@ fn testAnyScanner(scanner: anytype) !void {
     try expectToken(try scanner.next(), .many_table_end);
     try expectToken(try scanner.next(), .ignored);
     try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .value);
+    try expectToken(try scanner.next(), .literal_string);
     try expectToken(try scanner.next(), .ignored);
     try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .value);
+    try expectToken(try scanner.next(), .literal_string);
 }
 
 test Scanner {
