@@ -323,7 +323,7 @@ pub fn next(self: *Scanner) !Token {
     }
 }
 const test_buf: []const u8 =
-    \\name="Poop on Barney"
+    \\name="Write a Shopping List"
     \\tags=["personal","weekly", "barney"]
     \\
     \\assigned_to="everyone"
