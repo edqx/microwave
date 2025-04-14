@@ -2,7 +2,7 @@ const std = @import("std");
 
 const Scanner = @This();
 
-pub const Error = error{ EndOfBuffer, UnexpectedEndOfBuffer, UnexpectedToken };
+pub const Error = error{ UnexpectedEndOfBuffer, UnexpectedToken };
 
 pub const Token = struct {
     pub const Kind = enum {
@@ -24,6 +24,13 @@ pub const Token = struct {
     pub const Range = struct {
         start: usize,
         end: usize,
+
+        pub fn offset(self: Range, add: usize) Range {
+            return .{
+                .start = self.start + add,
+                .end = self.end + add,
+            };
+        }
 
         pub fn expand(self: Range, other: Range) Range {
             return .{
@@ -244,13 +251,13 @@ fn statefulConsumeRoot(self: *Scanner) !Token {
     return key_range.token(.key);
 }
 
-pub fn next(self: *Scanner) !Token {
+pub fn next(self: *Scanner) !?Token {
     const original_pos = self.cursor;
     errdefer self.cursor = original_pos;
     switch (self.state) {
         .expect_key_or_table => {
             return self.statefulConsumeRoot() catch |e| switch (e) {
-                Error.UnexpectedEndOfBuffer => return Error.EndOfBuffer,
+                Error.UnexpectedEndOfBuffer => return null,
                 else => return e,
             };
         },
@@ -322,6 +329,11 @@ pub fn next(self: *Scanner) !Token {
         },
     }
 }
+
+pub fn tokenContents(self: *Scanner, token: Token) []const u8 {
+    return self.buffer[token.range.start..token.range.end];
+}
+
 const test_buf: []const u8 =
     \\name="Write a Shopping List"
     \\tags=["personal","weekly", "barney"]
@@ -419,59 +431,78 @@ test Scanner {
     try testAnyScanner(&scanner);
 }
 
-pub fn BufferReaderScanner(comptime buf_size: usize, comptime ReaderType: type) type {
+pub fn BufferedReaderScanner(comptime buf_size: usize, comptime ReaderType: type) type {
     return struct {
-        const BufferReaderScannerT = @This();
+        const BufferedReaderScannerT = @This();
 
-        pub const BufferReaderError = error{BufferTooSmall};
+        pub const BufferedReaderError = Error || ReaderType.Error || error{BufferTooSmall};
 
-        buf: [buf_size]u8 = undefined,
+        buffer: [buf_size]u8 = undefined,
+        buffer_global_offset: usize = 0,
         eof: bool = false,
         reader: ReaderType,
 
         scanner: Scanner = .{ .buffer = &.{} },
 
-        pub fn nextImpl(self: *BufferReaderScannerT) !?Token {
-            return self.scanner.next() catch |e| switch (e) {
-                Error.EndOfBuffer, Error.UnexpectedEndOfBuffer => {
-                    if (self.eof) return switch (e) {
-                        Error.EndOfBuffer => null,
-                        else => e,
-                    };
-                    if (self.scanner.buffer.len < buf_size) {
-                        const request_bytes = buf_size - self.scanner.buffer.len;
-                        const read_bytes = try self.reader.readAll(self.buf[buf_size - request_bytes ..]);
-                        if (read_bytes != request_bytes) self.eof = true;
-                    } else {
-                        const request_bytes = self.scanner.cursor;
-                        if (request_bytes == 0) return BufferReaderError.BufferTooSmall;
-                        std.mem.copyForwards(u8, self.buf[0 .. buf_size - request_bytes], self.buf[request_bytes..]);
-                        const read_bytes = try self.reader.readAll(self.buf[buf_size - request_bytes ..]);
-                        if (read_bytes != request_bytes) self.eof = true;
-                        self.scanner.cursor = 0;
-                    }
-                    self.scanner.buffer = &self.buf;
-                    return try self.nextImpl();
-                },
-                else => return e,
-            };
+        fn fillBuffer(self: *BufferedReaderScannerT) !void {
+            const request_bytes = buf_size - self.scanner.buffer.len;
+            const read_bytes = try self.reader.readAll(self.buffer[buf_size - request_bytes ..]);
+            if (read_bytes != request_bytes) self.eof = true;
+            self.scanner.buffer = &self.buffer;
         }
 
-        pub fn next(self: *BufferReaderScannerT) !?Token {
-            const next_token = try self.nextImpl();
-            return next_token;
+        fn moveBufferForward(self: *BufferedReaderScannerT) !void {
+            const request_bytes = self.scanner.cursor;
+            if (request_bytes == 0) return BufferedReaderError.BufferTooSmall;
+            self.buffer_global_offset += request_bytes;
+            std.mem.copyForwards(u8, self.buffer[0 .. buf_size - request_bytes], self.buffer[request_bytes..]);
+            const read_bytes = try self.reader.readAll(self.buffer[buf_size - request_bytes ..]);
+            if (read_bytes != request_bytes) self.eof = true;
+            self.scanner.cursor = 0;
+            self.scanner.buffer = &self.buffer;
+        }
+
+        fn adjustBuffer(self: *BufferedReaderScannerT) !void {
+            if (self.eof) return Error.UnexpectedEndOfBuffer;
+            if (self.scanner.buffer.len < buf_size) {
+                try self.fillBuffer();
+            } else {
+                try self.moveBufferForward();
+            }
+        }
+
+        fn adjustBufferNext(self: *BufferedReaderScannerT) BufferedReaderError!?Token {
+            try self.adjustBuffer();
+            return try self.nextImpl();
+        }
+
+        fn nextImpl(self: *BufferedReaderScannerT) BufferedReaderError!?Token {
+            return self.scanner.next() catch |e| switch (e) {
+                Error.UnexpectedEndOfBuffer => return try self.adjustBufferNext(),
+                else => return e,
+            } orelse try self.adjustBufferNext();
+        }
+
+        pub fn next(self: *BufferedReaderScannerT) !?Token {
+            var next_token_in_buffer = try self.nextImpl() orelse return null;
+            next_token_in_buffer.range = next_token_in_buffer.range.offset(self.buffer_global_offset);
+            return next_token_in_buffer;
+        }
+
+        pub fn tokenContents(self: *BufferedReaderScannerT, token: Token) []const u8 {
+            return self.buffer[token.range.start - self.buffer_global_offset .. token.range.end - self.buffer_global_offset];
         }
     };
 }
 
-pub fn bufferReaderScanner(reader: anytype) BufferReaderScanner(4096, @TypeOf(reader)) {
+pub fn bufferedReaderScanner(reader: anytype) BufferedReaderScanner(4096, @TypeOf(reader)) {
     return .{ .reader = reader };
 }
 
-test BufferReaderScanner {
+test BufferedReaderScanner {
     var fba = std.io.fixedBufferStream(test_buf);
     const reader = fba.reader();
 
-    var scanner = bufferReaderScanner(reader);
+    var scanner = bufferedReaderScanner(reader);
     try testAnyScanner(&scanner);
 }
