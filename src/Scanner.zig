@@ -464,7 +464,7 @@ fn statefulConsumeRoot(self: *Scanner) !Token {
     return key_range.token(.key);
 }
 
-pub fn next(self: *Scanner) !?Token {
+pub fn nextRaw(self: *Scanner) !?Token {
     const original_pos = self.cursor;
     errdefer self.cursor = original_pos;
     switch (self.state) {
@@ -481,7 +481,7 @@ pub fn next(self: *Scanner) !?Token {
             if (try self.consumeSingle(isEqualsChar) != null) {
                 self.state = .expect_value;
                 errdefer self.state = .expect_key_with_access;
-                return try self.next();
+                return try self.nextRaw();
             }
             const key_range = try self.consumeKeyPart() orelse return Error.UnexpectedToken;
             return key_range.token(.key);
@@ -501,7 +501,7 @@ pub fn next(self: *Scanner) !?Token {
                 return range.expand(more_whitespace_range).token(.ignored);
             } else if (try self.consumeSingle(isDelimeterChar)) |range| {
                 _ = range;
-                return try self.next();
+                return try self.nextRaw();
             }
 
             if (try self.consumeSlice("\"\"\"") != null) {
@@ -559,6 +559,12 @@ pub fn next(self: *Scanner) !?Token {
     }
 }
 
+pub fn next(self: *Scanner) !?Token {
+    return while (try self.nextRaw()) |token| {
+        if (token.kind != .ignored) break token;
+    } else null;
+}
+
 pub fn tokenContents(self: *Scanner, token: Token) []const u8 {
     return self.buffer[token.range.start..token.range.end];
 }
@@ -597,68 +603,68 @@ fn expectToken(token: ?Token, kind: Token.Kind) !void {
 }
 
 fn testAnyScanner(scanner: anytype) !void {
-    try expectToken(try scanner.next(), .comment);
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .literal_string);
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .array_start);
-    try expectToken(try scanner.next(), .literal_string);
-    try expectToken(try scanner.next(), .literal_string);
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .literal_string);
-    try expectToken(try scanner.next(), .array_end);
+    try expectToken(try scanner.nextRaw(), .comment);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .key);
+    try expectToken(try scanner.nextRaw(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .key);
+    try expectToken(try scanner.nextRaw(), .array_start);
+    try expectToken(try scanner.nextRaw(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .array_end);
 
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .literal_string);
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .literal_string);
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .comment);
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .key);
+    try expectToken(try scanner.nextRaw(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .key);
+    try expectToken(try scanner.nextRaw(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .comment);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .key);
+    try expectToken(try scanner.nextRaw(), .literal_string);
 
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .many_table_start);
-    try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .many_table_end);
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .literal_string);
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .many_table_start);
+    try expectToken(try scanner.nextRaw(), .key);
+    try expectToken(try scanner.nextRaw(), .many_table_end);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .key);
+    try expectToken(try scanner.nextRaw(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .key);
+    try expectToken(try scanner.nextRaw(), .literal_string);
 
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .many_table_start);
-    try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .many_table_end);
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .literal_string);
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .literal_string);
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .array_start);
-    try expectToken(try scanner.next(), .literal_string);
-    try expectToken(try scanner.next(), .array_end);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .many_table_start);
+    try expectToken(try scanner.nextRaw(), .key);
+    try expectToken(try scanner.nextRaw(), .many_table_end);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .key);
+    try expectToken(try scanner.nextRaw(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .key);
+    try expectToken(try scanner.nextRaw(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .key);
+    try expectToken(try scanner.nextRaw(), .array_start);
+    try expectToken(try scanner.nextRaw(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .array_end);
 
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .many_table_start);
-    try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .many_table_end);
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .literal_string);
-    try expectToken(try scanner.next(), .ignored);
-    try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .many_table_start);
+    try expectToken(try scanner.nextRaw(), .key);
+    try expectToken(try scanner.nextRaw(), .many_table_end);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .key);
+    try expectToken(try scanner.nextRaw(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .key);
+    try expectToken(try scanner.nextRaw(), .literal_string);
 }
 
 test Scanner {
@@ -710,20 +716,26 @@ pub fn BufferedReaderScanner(comptime buf_size: usize, comptime ReaderType: type
 
         fn adjustBufferNext(self: *BufferedReaderScannerT) BufferedReaderError!?Token {
             try self.adjustBuffer();
-            return try self.nextImpl();
+            return try self.nextRawImpl();
         }
 
-        fn nextImpl(self: *BufferedReaderScannerT) BufferedReaderError!?Token {
-            return self.scanner.next() catch |e| switch (e) {
+        fn nextRawImpl(self: *BufferedReaderScannerT) BufferedReaderError!?Token {
+            return self.scanner.nextRaw() catch |e| switch (e) {
                 Error.UnexpectedEndOfBuffer => return try self.adjustBufferNext(),
                 else => return e,
             } orelse try self.adjustBufferNext();
         }
 
-        pub fn next(self: *BufferedReaderScannerT) !?Token {
-            var next_token_in_buffer = try self.nextImpl() orelse return null;
+        pub fn nextRaw(self: *BufferedReaderScannerT) !?Token {
+            var next_token_in_buffer = try self.nextRawImpl() orelse return null;
             next_token_in_buffer.range = next_token_in_buffer.range.offset(self.buffer_global_offset);
             return next_token_in_buffer;
+        }
+
+        pub fn next(self: *BufferedReaderScannerT) !?Token {
+            return while (try self.nextRaw()) |token| {
+                if (token.kind != .ignored) break token;
+            } else null;
         }
 
         pub fn tokenContents(self: *BufferedReaderScannerT, token: Token) []const u8 {
