@@ -2,13 +2,14 @@ const std = @import("std");
 
 const Scanner = @This();
 
-pub const Error = error{ UnexpectedEndOfBuffer, UnexpectedToken };
+pub const Error = error{ UnexpectedEndOfBuffer, UnexpectedByte };
 
 pub const Token = struct {
     pub const Kind = enum {
         ignored,
         comment,
         key,
+        access,
         literal_string,
         literal_base_integer,
         literal_integer,
@@ -20,7 +21,6 @@ pub const Token = struct {
         literal_local_date_time,
         literal_local_date,
         literal_local_time,
-        access,
         array_start,
         array_end,
         table_start,
@@ -74,6 +74,7 @@ const StringKind = enum {
 };
 
 buffer: []const u8,
+can_request_more: bool = false,
 cursor: usize = 0,
 
 state: State = .expect_key_or_table,
@@ -240,6 +241,11 @@ fn isNotWhitespaceChar(b: u8) bool {
     return !isWhitespaceChar(b);
 }
 
+pub fn reachedEnd(self: *Scanner, offset_required: usize) bool {
+    return !self.can_request_more and
+        (self.buffer.len < offset_required or self.cursor == self.buffer.len - offset_required);
+}
+
 fn peekMany(self: *Scanner, num_bytes: usize) ![]const u8 {
     std.debug.assert(num_bytes != 0);
     if (self.buffer.len < num_bytes or self.cursor > self.buffer.len - num_bytes) return Error.UnexpectedEndOfBuffer;
@@ -250,6 +256,10 @@ fn peekSingle(self: *Scanner) !u8 {
     return (try self.peekMany(1))[0];
 }
 
+fn peekAdvance(self: *Scanner, offset: usize) !u8 {
+    return (try self.peekMany(offset))[offset - 1];
+}
+
 fn consumeNone(self: *Scanner) !Token.Range {
     return .{
         .start = self.cursor,
@@ -258,6 +268,7 @@ fn consumeNone(self: *Scanner) !Token.Range {
 }
 
 fn consumeAnySingle(self: *Scanner) !Token.Range {
+    if (self.cursor > self.buffer.len - 1) return Error.UnexpectedEndOfBuffer;
     defer self.cursor += 1;
     return .{
         .start = self.cursor,
@@ -266,7 +277,10 @@ fn consumeAnySingle(self: *Scanner) !Token.Range {
 }
 
 fn consumeSingle(self: *Scanner, predicate: fn (char: u8) bool) !?Token.Range {
-    const peek = try self.peekSingle();
+    const peek = self.peekSingle() catch |e| switch (e) {
+        Error.UnexpectedEndOfBuffer => return if (self.reachedEnd(0)) null else e,
+        else => return e,
+    };
     if (!predicate(peek)) return null;
     return try self.consumeAnySingle();
 }
@@ -280,7 +294,14 @@ fn consumeMany(self: *Scanner, predicate: fn (char: u8) bool) !?Token.Range {
 }
 
 fn consumeSlice(self: *Scanner, slice: []const u8) !?Token.Range {
-    if (!std.mem.eql(u8, try self.peekMany(slice.len), slice)) return null;
+    for (0..slice.len) |i| {
+        const peek = self.peekAdvance(i + 1) catch |e| switch (e) {
+            Error.UnexpectedEndOfBuffer => if (self.reachedEnd(i)) return null else return e,
+            else => return e,
+        };
+        if (peek != slice[i]) return null;
+    }
+
     defer self.cursor += slice.len;
     return .{
         .start = self.cursor,
@@ -331,7 +352,7 @@ fn consumeDigitGroups(self: *Scanner, digit_predicate: fn (b: u8) bool) !?Token.
     while (true) {
         const expect_digit = try self.consumeSingle(isDigitGrouper) != null;
         const another_digit_range = try self.consumeSingle(digit_predicate) orelse
-            if (expect_digit) return Error.UnexpectedToken else break;
+            if (expect_digit) return Error.UnexpectedByte else break;
         digits_range = digits_range.expand(another_digit_range);
     }
     return digits_range;
@@ -346,16 +367,16 @@ fn consumeUnsignedIntegerBaseNumber(self: *Scanner) !?Token.Range {
         'o' => try self.consumeDigitGroups(isBase8Digit),
         'b' => try self.consumeDigitGroups(isBase2Digit),
         else => unreachable,
-    } orelse return Error.UnexpectedToken;
+    } orelse return Error.UnexpectedByte;
     return base_range.expand(digits_range);
 }
 
 fn consumeDate(self: *Scanner) !?Token.Range {
     const year_range = try self.consumeMany(isBase10Digit) orelse return null;
     if (try self.consumeSingle(isDateSeparator) == null) return null;
-    const month_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
-    if (try self.consumeSingle(isDateSeparator) == null) return Error.UnexpectedToken;
-    const day_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
+    const month_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
+    if (try self.consumeSingle(isDateSeparator) == null) return Error.UnexpectedByte;
+    const day_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
     _ = month_range;
     return year_range.expand(day_range);
 }
@@ -363,11 +384,11 @@ fn consumeDate(self: *Scanner) !?Token.Range {
 fn consumeTime(self: *Scanner) !?Token.Range {
     const hour_range = try self.consumeMany(isBase10Digit) orelse return null;
     if (try self.consumeSingle(isTimeSeparator) == null) return null;
-    const minute_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
-    if (try self.consumeSingle(isTimeSeparator) == null) return Error.UnexpectedToken;
-    const second_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
+    const minute_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
+    if (try self.consumeSingle(isTimeSeparator) == null) return Error.UnexpectedByte;
+    const second_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
     if (try self.consumeSingle(isFractionalSeparator)) |_| {
-        const millisecond_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
+        const millisecond_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
         return hour_range.expand(millisecond_range);
     }
     _ = minute_range;
@@ -377,9 +398,9 @@ fn consumeTime(self: *Scanner) !?Token.Range {
 fn consumeOffset(self: *Scanner) !?Token.Range {
     if (try self.consumeSingle(isUtcChar)) |range| return range;
     const sign_range = try self.consumeSingle(isNumberSign) orelse return null;
-    const hour_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
-    if (try self.consumeSingle(isTimeSeparator) == null) return Error.UnexpectedToken;
-    const minute_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
+    const hour_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
+    if (try self.consumeSingle(isTimeSeparator) == null) return Error.UnexpectedByte;
+    const minute_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
     _ = hour_range;
     return sign_range.expand(minute_range);
 }
@@ -387,7 +408,7 @@ fn consumeOffset(self: *Scanner) !?Token.Range {
 fn consumeDateTimeLiteralToken(self: *Scanner) !?Token {
     if (try self.consumeDate()) |date_range| {
         if (try self.consumeSingle(isDateTimeSeparator)) |_| {
-            const time_range = try self.consumeTime() orelse return Error.UnexpectedToken;
+            const time_range = try self.consumeTime() orelse return Error.UnexpectedByte;
             if (try self.consumeOffset()) |offset_range| {
                 return date_range.expand(offset_range).token(.literal_offset_date_time);
             }
@@ -416,15 +437,15 @@ fn consumeNumberLiteralToken(self: *Scanner) !?Token {
     }
 
     const digits_range = try self.consumeDigitGroups(isBase10Digit) orelse
-        return if (sign_range != null) Error.UnexpectedToken else null;
+        return if (sign_range != null) Error.UnexpectedByte else null;
 
     const integer_part_range = if (sign_range) |range| range.expand(digits_range) else digits_range;
 
     if (try self.consumeSingle(isFractionalSeparator) != null) {
-        const fraction_digits = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
+        const fraction_digits = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
         if (try self.consumeSingle(isExponentialSeparator) != null) {
             _ = try self.consumeSingle(isNumberSign);
-            const exponential_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedToken;
+            const exponential_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
             return integer_part_range.expand(exponential_range).token(.literal_float);
         }
         return integer_part_range.expand(fraction_digits).token(.literal_float);
@@ -435,7 +456,7 @@ fn consumeNumberLiteralToken(self: *Scanner) !?Token {
 fn statefulConsumeTableClose(self: *Scanner) !?Token.Range {
     const table_close_range = try self.consumeSingle(isTableCloseChar) orelse return null;
     if (self.state == .expect_many_table_key_with_access) {
-        const many_table_close_range = try self.consumeSingle(isTableCloseChar) orelse return Error.UnexpectedToken;
+        const many_table_close_range = try self.consumeSingle(isTableCloseChar) orelse return Error.UnexpectedByte;
         self.state = .expect_key_or_table;
         return table_close_range.expand(many_table_close_range);
     }
@@ -447,7 +468,7 @@ fn statefulConsumeRoot(self: *Scanner) !Token {
     if (try self.consumeMany(isWhitespaceChar)) |range| return range.token(.ignored);
     if (try self.consumeCommentLine()) |range| return range.token(.comment);
     const key_range = try self.consumeKeyPart() orelse {
-        const table_open_range = try self.consumeSingle(isTableOpenChar) orelse return Error.UnexpectedToken;
+        const table_open_range = try self.consumeSingle(isTableOpenChar) orelse return Error.UnexpectedByte;
 
         if (try self.consumeSingle(isTableOpenChar)) |many_table_open_range| {
             self.state = .expect_many_table_key;
@@ -483,7 +504,7 @@ pub fn nextRaw(self: *Scanner) !?Token {
                 errdefer self.state = .expect_key_with_access;
                 return try self.nextRaw();
             }
-            const key_range = try self.consumeKeyPart() orelse return Error.UnexpectedToken;
+            const key_range = try self.consumeKeyPart() orelse return Error.UnexpectedByte;
             return key_range.token(.key);
         },
         .expect_value => {
@@ -493,6 +514,8 @@ pub fn nextRaw(self: *Scanner) !?Token {
             if (try self.consumeSingle(isArrayCloseChar)) |range| return range.token(.array_end);
             if (try self.consumeSingle(isInlineTableOpenChar)) |range| return range.token(.inline_table_start);
             if (try self.consumeSingle(isInlineTableCloseChar)) |range| return range.token(.inline_table_end);
+            if (try self.consumeSingle(isAccessChar)) |range| return range.token(.access);
+            if (try self.consumeSingle(isEqualsChar) != null) return try self.nextRaw();
 
             if (try self.consumeSingle(isNewlineChar)) |range| {
                 self.state = .expect_key_or_table;
@@ -502,6 +525,14 @@ pub fn nextRaw(self: *Scanner) !?Token {
             } else if (try self.consumeSingle(isDelimeterChar)) |range| {
                 _ = range;
                 return try self.nextRaw();
+            }
+
+            if (try self.consumeNumberLiteralToken()) |number_token| {
+                return number_token;
+            }
+
+            if (try self.consumeDateTimeLiteralToken()) |datetime_token| {
+                return datetime_token;
             }
 
             if (try self.consumeSlice("\"\"\"") != null) {
@@ -514,24 +545,17 @@ pub fn nextRaw(self: *Scanner) !?Token {
                 return string_range.token(.literal_string);
             }
 
-            if (try self.consumeDateTimeLiteralToken()) |datetime_token| {
-                return datetime_token;
-            }
-
-            if (try self.consumeNumberLiteralToken()) |number_token| {
-                return number_token;
-            }
-
             if (try self.consumeSlice("true") orelse try self.consumeSlice("false")) |range| {
                 return range.token(.literal_bool);
             }
 
-            return Error.UnexpectedToken;
+            const key_range = try self.consumeKeyPart() orelse return if (self.reachedEnd(0)) null else Error.UnexpectedByte;
+            return key_range.token(.key);
         },
         .expect_table_key, .expect_many_table_key => |original_state| {
             if (try self.consumeMany(isSpaceChar)) |range| return range.token(.ignored);
             if (try self.consumeCommentLine()) |range| return range.token(.comment);
-            const key_range = try self.consumeKeyPart() orelse return Error.UnexpectedToken;
+            const key_range = try self.consumeKeyPart() orelse return Error.UnexpectedByte;
             self.state = switch (self.state) {
                 .expect_table_key => .expect_table_key_with_access,
                 .expect_many_table_key => .expect_many_table_key_with_access,
@@ -553,7 +577,7 @@ pub fn nextRaw(self: *Scanner) !?Token {
                     else => unreachable,
                 });
             }
-            const key_range = try self.consumeKeyPart() orelse return Error.UnexpectedToken;
+            const key_range = try self.consumeKeyPart() orelse return Error.UnexpectedByte;
             return key_range.token(.key);
         },
     }
@@ -561,7 +585,10 @@ pub fn nextRaw(self: *Scanner) !?Token {
 
 pub fn next(self: *Scanner) !?Token {
     return while (try self.nextRaw()) |token| {
-        if (token.kind != .ignored) break token;
+        switch (token.kind) {
+            .ignored, .comment => continue,
+            else => break token,
+        }
     } else null;
 }
 
@@ -682,15 +709,17 @@ pub fn BufferedReaderScanner(comptime buf_size: usize, comptime ReaderType: type
 
         buffer: [buf_size]u8 = undefined,
         buffer_global_offset: usize = 0,
-        eof: bool = false,
         reader: ReaderType,
 
-        scanner: Scanner = .{ .buffer = &.{} },
+        scanner: Scanner = .{
+            .buffer = &.{},
+            .can_request_more = true,
+        },
 
         fn fillBuffer(self: *BufferedReaderScannerT) !void {
             const request_bytes = buf_size - self.scanner.buffer.len;
             const read_bytes = try self.reader.readAll(self.buffer[buf_size - request_bytes ..]);
-            if (read_bytes != request_bytes) self.eof = true;
+            if (read_bytes != request_bytes) self.scanner.can_request_more = false;
             self.scanner.buffer = &self.buffer;
         }
 
@@ -700,13 +729,13 @@ pub fn BufferedReaderScanner(comptime buf_size: usize, comptime ReaderType: type
             self.buffer_global_offset += request_bytes;
             std.mem.copyForwards(u8, self.buffer[0 .. buf_size - request_bytes], self.buffer[request_bytes..]);
             const read_bytes = try self.reader.readAll(self.buffer[buf_size - request_bytes ..]);
-            if (read_bytes != request_bytes) self.eof = true;
+            if (read_bytes != request_bytes) self.scanner.can_request_more = false;
             self.scanner.cursor = 0;
             self.scanner.buffer = &self.buffer;
         }
 
         fn adjustBuffer(self: *BufferedReaderScannerT) !void {
-            if (self.eof) return Error.UnexpectedEndOfBuffer;
+            if (!self.scanner.can_request_more) return Error.UnexpectedEndOfBuffer;
             if (self.scanner.buffer.len < buf_size) {
                 try self.fillBuffer();
             } else {
@@ -734,7 +763,10 @@ pub fn BufferedReaderScanner(comptime buf_size: usize, comptime ReaderType: type
 
         pub fn next(self: *BufferedReaderScannerT) !?Token {
             return while (try self.nextRaw()) |token| {
-                if (token.kind != .ignored) break token;
+                switch (token.kind) {
+                    .ignored, .comment => continue,
+                    else => break token,
+                }
             } else null;
         }
 
