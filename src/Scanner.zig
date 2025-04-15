@@ -705,7 +705,7 @@ pub fn BufferedReaderScanner(comptime buf_size: usize, comptime ReaderType: type
 
         const BufferedReaderScannerT = @This();
 
-        pub const BufferedReaderError = Error || ReaderType.Error || error{BufferTooSmall};
+        pub const Error = Scanner.Error || ReaderType.Error || error{BufferTooSmall};
 
         buffer: [buf_size]u8 = undefined,
         buffer_global_offset: usize = 0,
@@ -725,7 +725,7 @@ pub fn BufferedReaderScanner(comptime buf_size: usize, comptime ReaderType: type
 
         fn moveBufferForward(self: *BufferedReaderScannerT) !void {
             const request_bytes = self.scanner.cursor;
-            if (request_bytes == 0) return BufferedReaderError.BufferTooSmall;
+            if (request_bytes == 0) return BufferedReaderScannerT.Error.BufferTooSmall;
             self.buffer_global_offset += request_bytes;
             std.mem.copyForwards(u8, self.buffer[0 .. buf_size - request_bytes], self.buffer[request_bytes..]);
             const read_bytes = try self.reader.readAll(self.buffer[buf_size - request_bytes ..]);
@@ -735,7 +735,7 @@ pub fn BufferedReaderScanner(comptime buf_size: usize, comptime ReaderType: type
         }
 
         fn adjustBuffer(self: *BufferedReaderScannerT) !void {
-            if (!self.scanner.can_request_more) return Error.UnexpectedEndOfBuffer;
+            if (!self.scanner.can_request_more) return error.UnexpectedEndOfBuffer;
             if (self.scanner.buffer.len < buf_size) {
                 try self.fillBuffer();
             } else {
@@ -743,14 +743,14 @@ pub fn BufferedReaderScanner(comptime buf_size: usize, comptime ReaderType: type
             }
         }
 
-        fn adjustBufferNext(self: *BufferedReaderScannerT) BufferedReaderError!?Token {
+        fn adjustBufferNext(self: *BufferedReaderScannerT) BufferedReaderScannerT.Error!?Token {
             try self.adjustBuffer();
             return try self.nextRawImpl();
         }
 
-        fn nextRawImpl(self: *BufferedReaderScannerT) BufferedReaderError!?Token {
+        fn nextRawImpl(self: *BufferedReaderScannerT) BufferedReaderScannerT.Error!?Token {
             return self.scanner.nextRaw() catch |e| switch (e) {
-                Error.UnexpectedEndOfBuffer => return try self.adjustBufferNext(),
+                error.UnexpectedEndOfBuffer => return try self.adjustBufferNext(),
                 else => return e,
             } orelse try self.adjustBufferNext();
         }

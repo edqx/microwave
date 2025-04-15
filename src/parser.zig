@@ -2,8 +2,6 @@ const std = @import("std");
 
 const Scanner = @import("Scanner.zig");
 
-pub const Error = error{ UnexpectedToken, UnexpectedEof, InvalidKeyAccess, DuplicateKey };
-
 pub const Value = union(enum) {
     pub const Table = std.StringHashMapUnmanaged(Value);
     pub const Array = std.ArrayListUnmanaged(Value);
@@ -58,8 +56,16 @@ pub fn Parser(ScannerType: type) type {
     return struct {
         const ParserT = @This();
 
+        pub const Error = std.mem.Allocator.Error || std.fmt.ParseIntError || std.fmt.ParseFloatError || ScannerType.Error || error{ UnexpectedToken, UnexpectedEof, InvalidKeyAccess, DuplicateKey };
+
         allocator: std.mem.Allocator,
         scanner: *ScannerType,
+
+        current_token: ?Scanner.Token = null,
+
+        pub fn nextToken(self: *ParserT) !void {
+            self.current_token = try self.scanner.next();
+        }
 
         pub fn parseStringValueAlloc(self: ParserT, token_contents: []const u8) !Value {
             const string_contents = try self.allocator.dupe(u8, token_contents);
@@ -176,35 +182,24 @@ pub fn Parser(ScannerType: type) type {
             };
         }
 
-        pub const TableEntry = struct {
-            value_ptr: *Value,
-            first_value_token: Scanner.Token,
-        };
-
-        pub fn readTableAccess(self: ParserT, first_token: Scanner.Token, table: *Value.Table) !TableEntry {
-            std.debug.assert(first_token.kind == .key);
+        pub fn readTableAccessGetValuePtr(self: *ParserT, table: *Value.Table) !*Value {
+            std.debug.assert(self.current_token.?.kind == .key);
 
             var parent_table: *Value.Table = table;
-            var last_key_token: Scanner.Token = first_token;
+            var last_key_token: Scanner.Token = self.current_token.?;
 
             var created_table_value_root: ?*Value = null;
             errdefer if (created_table_value_root) |table_value| table_value.deinitRecursive(self.allocator);
 
-            var next_inner_token = try self.scanner.next();
             var expecting_key = false;
-            const first_value_token: Scanner.Token = while (next_inner_token) |inner_token| : (next_inner_token = try self.scanner.next()) {
-                switch (inner_token.kind) {
-                    .ignored,
-                    .comment,
-                    .table_start,
-                    .table_end,
-                    .many_table_start,
-                    .many_table_end,
-                    => unreachable,
+            try self.nextToken(); // skip first key
+            while (self.current_token) |token| : (try self.nextToken()) {
+                switch (token.kind) {
                     .key => {
                         if (!expecting_key) return Error.UnexpectedToken;
                         const key_contents = self.scanner.tokenContents(last_key_token);
-                        const nested_table_value = try table.getOrPut(self.allocator, key_contents);
+                        const nested_table_value = try parent_table.getOrPut(self.allocator, key_contents);
+                        errdefer _ = parent_table.remove(key_contents);
                         if (nested_table_value.found_existing) {
                             if (nested_table_value.value_ptr.* != .table) return Error.InvalidKeyAccess;
                         } else {
@@ -212,46 +207,60 @@ pub fn Parser(ScannerType: type) type {
                             created_table_value_root = nested_table_value.value_ptr;
                         }
                         parent_table = &nested_table_value.value_ptr.table;
-                        last_key_token = inner_token;
+                        last_key_token = token;
+                        expecting_key = false;
                     },
                     .access => {
+                        if (expecting_key) return Error.UnexpectedToken;
                         expecting_key = true;
                     },
-                    .literal_string,
-                    .literal_base_integer,
-                    .literal_integer,
-                    .literal_float,
-                    .literal_inf,
-                    .literal_nan,
-                    .literal_bool,
-                    .literal_offset_date_time,
-                    .literal_local_date_time,
-                    .literal_local_date,
-                    .literal_local_time,
-                    .array_start,
-                    .inline_table_start,
-                    .array_end,
-                    .inline_table_end,
-                    => {
+                    else => {
                         if (expecting_key) return Error.UnexpectedToken;
-                        break inner_token;
+                        break;
                     },
                 }
             } else return Error.UnexpectedEof;
 
             const key_contents = self.scanner.tokenContents(last_key_token);
-            const last_value = try table.getOrPut(self.allocator, key_contents);
+            const last_value = try parent_table.getOrPut(self.allocator, key_contents);
             if (last_value.found_existing) return Error.DuplicateKey;
 
-            return .{
-                .first_value_token = first_value_token,
-                .value_ptr = last_value.value_ptr,
-            };
+            return last_value.value_ptr;
         }
 
-        pub fn readValueToken(self: ParserT, token: Scanner.Token) !Value {
-            const token_contents = self.scanner.tokenContents(token);
-            return switch (token.kind) {
+        pub fn readArrayValue(self: *ParserT) !Value {
+            std.debug.assert(self.current_token.?.kind == .array_start);
+
+            var array_value: Value = .{ .array = .empty };
+            errdefer array_value.deinitRecursive(self.allocator);
+
+            try self.nextToken(); // skip array start token
+            while (self.current_token) |token| : (try self.nextToken()) {
+                if (token.kind == .array_end) break;
+                try array_value.array.append(self.allocator, try self.readValue());
+            }
+            return array_value;
+        }
+
+        pub fn readInlineTableValue(self: *ParserT) !Value {
+            std.debug.assert(self.current_token.?.kind == .inline_table_start);
+
+            var table_value: Value = .{ .table = .empty };
+            errdefer table_value.deinitRecursive(self.allocator);
+
+            try self.nextToken(); // skip inline table start token
+            while (self.current_token) |token| : (try self.nextToken()) {
+                if (token.kind == .inline_table_end) break;
+                const table_entry = try self.readTableAccessGetValuePtr(&table_value.table);
+                table_entry.* = try self.readValue();
+                errdefer table_entry.deinitRecursive(self.allocator);
+            }
+            return table_value;
+        }
+
+        pub fn readValue(self: *ParserT) Error!Value {
+            const token_contents = self.scanner.tokenContents(self.current_token.?);
+            const value = switch (self.current_token.?.kind) {
                 .ignored,
                 .comment,
                 .table_start,
@@ -275,60 +284,87 @@ pub fn Parser(ScannerType: type) type {
                 .literal_local_date_time => try self.parseLocalDateTimeValueAlloc(token_contents),
                 .literal_local_date => try self.parseLocalDateValueAlloc(token_contents),
                 .literal_local_time => try self.parseLocalTimeValueAlloc(token_contents),
-                .array_start => blk: {
-                    var array_value: Value = .{ .array = .empty };
-                    errdefer array_value.deinitRecursive(self.allocator);
-                    var next_inner_token = try self.scanner.next();
-                    while (next_inner_token) |inner_token| : (next_inner_token = try self.scanner.next()) {
-                        if (inner_token.kind == .array_end) break;
-                        try array_value.array.append(self.allocator, try self.readValueToken(inner_token));
-                    }
-                    break :blk array_value;
-                },
-                .inline_table_start => blk: {
-                    var table_value: Value = .{ .table = .empty };
-                    errdefer table_value.deinitRecursive(self.allocator);
-                    var next_inner_token = try self.scanner.next();
-                    while (next_inner_token) |inner_token| : (next_inner_token = try self.scanner.next()) {
-                        if (inner_token.kind == .inline_table_end) break;
-                        const table_entry = try self.readTableAccess(inner_token, &table_value.table);
-                        table_entry.value_ptr.* = try self.readValueToken(table_entry.first_value_token);
-                        errdefer table_entry.value_ptr.deinitRecursive(self.allocator);
-                    }
-                    break :blk table_value;
-                },
+                .array_start => try self.readArrayValue(),
+                .inline_table_start => try self.readInlineTableValue(),
             };
+            return value;
         }
 
-        pub fn readRootTable(self: ParserT) !Value {
-            var table_value: Value = .{ .table = .empty };
-            errdefer table_value.deinitRecursive(self.allocator);
-            var next_inner_token = try self.scanner.next();
-            while (next_inner_token) |inner_token| : (next_inner_token = try self.scanner.next()) {
-                if (inner_token.kind == .inline_table_end) break;
-                const table_entry = try self.readTableAccess(inner_token, &table_value.table);
-                table_entry.value_ptr.* = try self.readValueToken(table_entry.first_value_token);
-                errdefer table_entry.value_ptr.deinitRecursive(self.allocator);
+        pub fn readRootTableValue(self: *ParserT) !Value {
+            var root_table: Value = .{ .table = .empty };
+            var active_table = &root_table;
+
+            try self.nextToken(); // skip inline table start token
+            while (self.current_token) |_| : (try self.nextToken()) {
+                switch (self.current_token.?.kind) {
+                    .table_start => {
+                        try self.nextToken();
+                        const table_entry = try self.readTableAccessGetValuePtr(&root_table.table);
+                        table_entry.* = .{ .table = .empty };
+                        active_table = table_entry;
+                    },
+                    .many_table_start => {},
+                    .key => {
+                        const table_entry = try self.readTableAccessGetValuePtr(&active_table.table);
+                        table_entry.* = try self.readValue();
+                        errdefer table_entry.deinitRecursive(self.allocator);
+                    },
+                    else => {
+                        std.debug.print("got unexpected token: {}\n", .{self.current_token.?});
+                        return Error.UnexpectedToken;
+                    },
+                }
             }
-            return table_value;
+            return root_table;
         }
     };
 }
 
 allocator: std.mem.Allocator,
 
+fn testKey(table: Value.Table, path: anytype, comptime value_type: std.meta.Tag(Value), value: @FieldType(Value, @tagName(value_type))) !void {
+    var parent = table;
+    inline for (0.., path) |i, part| {
+        const is_last = i == path.len - 1;
+        const child = parent.get(part);
+        try std.testing.expect(child != null);
+        if (is_last) {
+            try std.testing.expect(std.meta.activeTag(child.?) == value_type);
+            if (value_type == .string) {
+                try std.testing.expectEqualSlices(u8, value, @field(child.?, @tagName(value_type)));
+            } else {
+                try std.testing.expectEqual(value, @field(child.?, @tagName(value_type)));
+            }
+        } else {
+            try std.testing.expect(child.? == .table);
+            parent = child.?.table;
+        }
+    }
+}
+
 test Parser {
     const buf: []const u8 =
-        \\name = 5
+        \\barney.name = "Barney"
+        \\barney.age = 16
+        \\barney.breed = "unknown"
+        \\
+        \\[barney.colours]
+        \\head = "white"
+        \\body = "brown"
+        \\tail = "red"
     ;
 
     var scanner = Scanner{ .buffer = buf };
     var parser: Parser(Scanner) = .{ .allocator = std.testing.allocator, .scanner = &scanner };
 
-    var root_table = try parser.readRootTable();
+    var root_table = try parser.readRootTableValue();
     defer root_table.deinitRecursive(std.testing.allocator);
 
-    std.debug.print("table: {}\n", .{
-        root_table.table.get("name").?.integer,
-    });
+    try testKey(root_table.table, .{ "barney", "name" }, .string, "Barney");
+    try testKey(root_table.table, .{ "barney", "age" }, .integer, 16);
+    try testKey(root_table.table, .{ "barney", "breed" }, .string, "unknown");
+
+    try testKey(root_table.table, .{ "barney", "colours", "head" }, .string, "white");
+    try testKey(root_table.table, .{ "barney", "colours", "body" }, .string, "brown");
+    try testKey(root_table.table, .{ "barney", "colours", "tail" }, .string, "red");
 }
