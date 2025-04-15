@@ -11,6 +11,20 @@ pub const Value = union(enum) {
         date: ?[]const u8 = null,
         time: ?[]const u8 = null,
         offset: ?[]const u8 = null,
+
+        pub fn dupe(self: DateTime, allocator: std.mem.Allocator) DateTime {
+            const new_date = if (self.date) |date| try allocator.dupe(u8, date) else null;
+            errdefer if (new_date) |date| allocator.free(date);
+            const new_time = if (self.time) |time| try allocator.dupe(u8, time) else null;
+            errdefer if (new_time) |time| allocator.free(time);
+            const new_offset = if (self.offset) |offset| try allocator.dupe(u8, offset) else null;
+            errdefer if (new_offset) |offset| allocator.free(offset);
+            return .{
+                .date = new_date,
+                .time = new_time,
+                .offset = new_offset,
+            };
+        }
     };
 
     none: void,
@@ -358,7 +372,7 @@ pub fn Parser(ScannerType: type) type {
 }
 
 pub const Document = struct {
-    value: Value,
+    root_table: Value.Table,
     arena: std.heap.ArenaAllocator,
 
     pub fn deinit(self: Document) void {
@@ -366,7 +380,7 @@ pub const Document = struct {
     }
 };
 
-pub fn parseFromScannerOwned(scanner: anytype, arena: std.mem.Allocator) !Value.Table {
+pub fn fromScannerOwned(arena: std.mem.Allocator, scanner: anytype) !Value.Table {
     var parser: Parser(@typeInfo(@TypeOf(scanner)).pointer.child) = .{
         .allocator = arena,
         .scanner = scanner,
@@ -378,42 +392,42 @@ pub fn parseFromScannerOwned(scanner: anytype, arena: std.mem.Allocator) !Value.
     return root_table;
 }
 
-pub fn parseFromSliceOwned(slice: []const u8, arena: std.mem.Allocator) !Value.Table {
+pub fn fromSliceOwned(arena: std.mem.Allocator, slice: []const u8) !Value.Table {
     var scanner: Scanner = .{ .buffer = slice };
-    return try parseFromScannerOwned(&scanner, arena);
+    return try fromScannerOwned(arena, &scanner);
 }
 
-pub fn parseFromReaderOwned(reader: anytype, arena: std.mem.Allocator) !Value.Table {
+pub fn fromReaderOwned(arena: std.mem.Allocator, reader: anytype) !Value.Table {
     var scanner: Scanner.bufferedReaderScanner(reader) = .{ .reader = reader };
-    return try parseFromScannerOwned(&scanner, arena);
+    return try fromScannerOwned(arena, &scanner);
 }
 
-pub fn parseFromScanner(scanner: anytype, gpa: std.mem.Allocator) !Value.Table {
+pub fn fromScanner(scanner: anytype, gpa: std.mem.Allocator) !Document {
     var arena = std.heap.ArenaAllocator.init(gpa);
     errdefer arena.deinit();
 
     return .{
-        .value = try parseFromScannerOwned(scanner, arena.allocator()),
+        .root_table = try fromScannerOwned(arena.allocator(), scanner),
         .arena = arena,
     };
 }
 
-pub fn parseFromSlice(slice: []const u8, gpa: std.mem.Allocator) !Document {
+pub fn fromSlice(slice: []const u8, gpa: std.mem.Allocator) !Document {
     var arena = std.heap.ArenaAllocator.init(gpa);
     errdefer arena.deinit();
 
     return .{
-        .value = try parseFromSliceOwned(slice, arena.allocator()),
+        .root_table = try fromSliceOwned(arena.allocator(), slice),
         .arena = arena,
     };
 }
 
-pub fn parseFromReader(reader: anytype, gpa: std.mem.Allocator) !Value.Table {
+pub fn fromReader(reader: anytype, gpa: std.mem.Allocator) !Document {
     var arena = std.heap.ArenaAllocator.init(gpa);
     errdefer arena.deinit();
 
     return .{
-        .value = try parseFromReaderOwned(reader, arena.allocator()),
+        .root_table = try fromReaderOwned(arena.allocator(), reader),
         .arena = arena,
     };
 }
