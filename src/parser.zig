@@ -27,9 +27,7 @@ pub const Value = union(enum) {
         switch (self.*) {
             .none => {},
             .table => |*table_value| {
-                var values = table_value.valueIterator();
-                while (values.next()) |item_ptr| item_ptr.deinitRecursive(allocator);
-                table_value.deinit(allocator);
+                deinitTable(table_value, allocator);
             },
             .array => |*array_value| {
                 for (array_value.items) |*item_ptr| item_ptr.deinitRecursive(allocator);
@@ -53,6 +51,12 @@ pub const Value = union(enum) {
         }
     }
 };
+
+pub fn deinitTable(table_value: *Value.Table, allocator: std.mem.Allocator) void {
+    var values = table_value.valueIterator();
+    while (values.next()) |item_ptr| item_ptr.deinitRecursive(allocator);
+    table_value.deinit(allocator);
+}
 
 pub fn Parser(ScannerType: type) type {
     return struct {
@@ -314,7 +318,7 @@ pub fn Parser(ScannerType: type) type {
             return value;
         }
 
-        pub fn readRootTableValue(self: *ParserT) !Value {
+        pub fn readRootTableValue(self: *ParserT) !Value.Table {
             var root_table: Value = .{ .table = .empty };
             var active_table = &root_table.table;
 
@@ -348,15 +352,74 @@ pub fn Parser(ScannerType: type) type {
                     },
                 }
             }
-            return root_table;
+            return root_table.table;
         }
     };
 }
 
-allocator: std.mem.Allocator,
+pub const Document = struct {
+    value: Value,
+    arena: std.heap.ArenaAllocator,
 
-fn testKey(table_value: Value, path: anytype, comptime value_type: std.meta.Tag(Value), value: @FieldType(Value, @tagName(value_type))) !void {
-    var parent = table_value;
+    pub fn deinit(self: Document) void {
+        self.arena.deinit();
+    }
+};
+
+pub fn parseFromScannerOwned(scanner: anytype, arena: std.mem.Allocator) !Value.Table {
+    var parser: Parser(@typeInfo(@TypeOf(scanner)).pointer.child) = .{
+        .allocator = arena,
+        .scanner = scanner,
+    };
+
+    const root_table = try parser.readRootTableValue();
+    errdefer root_table.deinit(arena);
+
+    return root_table;
+}
+
+pub fn parseFromSliceOwned(slice: []const u8, arena: std.mem.Allocator) !Value.Table {
+    var scanner: Scanner = .{ .buffer = slice };
+    return try parseFromScannerOwned(&scanner, arena);
+}
+
+pub fn parseFromReaderOwned(reader: anytype, arena: std.mem.Allocator) !Value.Table {
+    var scanner: Scanner.bufferedReaderScanner(reader) = .{ .reader = reader };
+    return try parseFromScannerOwned(&scanner, arena);
+}
+
+pub fn parseFromScanner(scanner: anytype, gpa: std.mem.Allocator) !Value.Table {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+
+    return .{
+        .value = try parseFromScannerOwned(scanner, arena.allocator()),
+        .arena = arena,
+    };
+}
+
+pub fn parseFromSlice(slice: []const u8, gpa: std.mem.Allocator) !Document {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+
+    return .{
+        .value = try parseFromSliceOwned(slice, arena.allocator()),
+        .arena = arena,
+    };
+}
+
+pub fn parseFromReader(reader: anytype, gpa: std.mem.Allocator) !Value.Table {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+
+    return .{
+        .value = try parseFromReaderOwned(reader, arena.allocator()),
+        .arena = arena,
+    };
+}
+
+fn testKey(table_value: Value.Table, path: anytype, comptime value_type: std.meta.Tag(Value), value: @FieldType(Value, @tagName(value_type))) !void {
+    var parent: Value = .{ .table = table_value };
     inline for (0.., path) |i, part| {
         const is_last = i == path.len - 1;
         var child: ?Value = undefined;
@@ -416,7 +479,7 @@ test Parser {
     var parser: Parser(Scanner) = .{ .allocator = std.testing.allocator, .scanner = &scanner };
 
     var root_table = try parser.readRootTableValue();
-    defer root_table.deinitRecursive(std.testing.allocator);
+    defer deinitTable(&root_table, std.testing.allocator);
 
     try testKey(root_table, .{ "barney", "name" }, .string, "Barney");
     try testKey(root_table, .{ "barney", "age" }, .integer, 16);
