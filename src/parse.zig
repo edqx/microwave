@@ -12,7 +12,7 @@ pub const Value = union(enum) {
         time: ?[]const u8 = null,
         offset: ?[]const u8 = null,
 
-        pub fn dupe(self: DateTime, allocator: std.mem.Allocator) DateTime {
+        pub fn dupe(self: DateTime, allocator: std.mem.Allocator) !DateTime {
             const new_date = if (self.date) |date| try allocator.dupe(u8, date) else null;
             errdefer if (new_date) |date| allocator.free(date);
             const new_time = if (self.time) |time| try allocator.dupe(u8, time) else null;
@@ -24,6 +24,12 @@ pub const Value = union(enum) {
                 .time = new_time,
                 .offset = new_offset,
             };
+        }
+
+        pub fn deinit(self: DateTime, allocator: std.mem.Allocator) void {
+            if (self.offset) |offset| allocator.free(offset);
+            if (self.time) |time| allocator.free(time);
+            if (self.date) |date| allocator.free(date);
         }
     };
 
@@ -37,11 +43,51 @@ pub const Value = union(enum) {
     boolean: bool,
     date_time: DateTime,
 
+    pub fn dupeRecursive(self: Value, allocator: std.mem.Allocator) !Value {
+        return blk: switch (self) {
+            .none => .none,
+            .table => |table_value| {
+                var result: Value = .{ .table = .empty };
+                errdefer result.deinitRecursive(allocator);
+                var entries = table_value.iterator();
+                while (entries.next()) |entry| {
+                    var duped = try entry.value_ptr.dupeRecursive(allocator);
+                    errdefer duped.deinitRecursive(allocator);
+                    try result.table.put(allocator, entry.key_ptr.*, duped);
+                }
+                break :blk result;
+            },
+            .array => |array_value| {
+                var result: Value = .{ .array = try .initCapacity(allocator, array_value.items.len) };
+                errdefer result.deinitRecursive(allocator);
+                for (array_value.items) |item| {
+                    var duped = try item.dupeRecursive(allocator);
+                    errdefer duped.deinitRecursive(allocator);
+                    result.array.appendAssumeCapacity(duped);
+                }
+                break :blk result;
+            },
+            .array_of_tables => |array_value| {
+                var result: Value = .{ .array = try .initCapacity(allocator, array_value.items.len) };
+                errdefer result.deinitRecursive(allocator);
+                for (array_value.items) |item| {
+                    var duped = try (@as(Value, .{ .table = item })).dupeRecursive(allocator);
+                    errdefer duped.deinitRecursive(allocator);
+                    result.array.appendAssumeCapacity(duped);
+                }
+                break :blk result;
+            },
+            .string => |string_value| .{ .string = try allocator.dupe(u8, string_value) },
+            .integer, .float, .boolean => self,
+            .date_time => |date_time_value| .{ .date_time = try date_time_value.dupe(allocator) },
+        };
+    }
+
     pub fn deinitRecursive(self: *Value, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .none => {},
             .table => |*table_value| {
-                deinitTable(table_value, allocator);
+                deinitTable(allocator, table_value);
             },
             .array => |*array_value| {
                 for (array_value.items) |*item_ptr| item_ptr.deinitRecursive(allocator);
@@ -57,16 +103,12 @@ pub const Value = union(enum) {
             },
             .string => |string_value| allocator.free(string_value),
             .integer, .float, .boolean => {},
-            .date_time => |date_time_value| {
-                if (date_time_value.date) |date| allocator.free(date);
-                if (date_time_value.time) |time| allocator.free(time);
-                if (date_time_value.offset) |offset| allocator.free(offset);
-            },
+            .date_time => |date_time_value| date_time_value.deinit(allocator),
         }
     }
 };
 
-pub fn deinitTable(table_value: *Value.Table, allocator: std.mem.Allocator) void {
+pub fn deinitTable(allocator: std.mem.Allocator, table_value: *Value.Table) void {
     var values = table_value.valueIterator();
     while (values.next()) |item_ptr| item_ptr.deinitRecursive(allocator);
     table_value.deinit(allocator);
@@ -493,7 +535,7 @@ test Parser {
     var parser: Parser(Scanner) = .{ .allocator = std.testing.allocator, .scanner = &scanner };
 
     var root_table = try parser.readRootTableValue();
-    defer deinitTable(&root_table, std.testing.allocator);
+    defer deinitTable(std.testing.allocator, &root_table);
 
     try testKey(root_table, .{ "barney", "name" }, .string, "Barney");
     try testKey(root_table, .{ "barney", "age" }, .integer, 16);

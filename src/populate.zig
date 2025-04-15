@@ -6,32 +6,39 @@ pub fn Populate(Container: type) type {
     return struct {
         pub const Error = error{ IncorrectType, MissingKey };
 
-        pub fn deinitRecursive(allocator: std.mem.Allocator, val: Container) void {
-            if (Container == parse.Value.DateTime) {
-                if (val.offset) |offset| allocator.free(offset);
-                if (val.time) |time| allocator.free(time);
-                if (val.date) |date| allocator.free(date);
+        pub fn deinitRecursive(allocator: std.mem.Allocator, val: *Container) void {
+            if (Container == parse.Value) {
+                val.deinitRecursive(allocator);
+            } else if (Container == parse.Value.Table) {
+                parse.deinitTable(allocator, val);
+            } else if (Container == parse.Value.DateTime) {
+                val.deinit(allocator);
             } else if (type_info == .@"struct") {
                 comptime var i = type_info.@"struct".fields.len;
                 inline while (i > 0) {
                     i -= 1;
                     const field = type_info.@"struct".fields[i];
-                    Populate(field.type).deinitRecursive(allocator, @field(val, field.name));
+                    Populate(field.type).deinitRecursive(allocator, &@field(val, field.name));
                 }
             } else if (Container == []const u8) {
-                allocator.free(val);
+                allocator.free(val.*);
             } else if (type_info == .pointer and type_info.pointer.size == .slice) {
                 var i: usize = val.len;
                 while (i > 0) {
                     i -= 1;
-                    const elem = val[i];
-                    Populate(type_info.pointer.child).deinitRecursive(allocator, elem);
+                    Populate(type_info.pointer.child).deinitRecursive(allocator, &val.*[i]);
                 }
-                allocator.free(val);
-            }
+                allocator.free(val.*);
+            } else if (Container == i64 or Container == f64 or Container == bool) {
+                //
+            } else @compileError("Cannot de-initialise container of type " ++ @typeName(Container));
         }
 
         pub fn intoFromValueOwned(allocator: std.mem.Allocator, destination: *Container, value: parse.Value) !void {
+            if (Container == parse.Value) {
+                destination.* = try value.dupeRecursive(allocator);
+                return;
+            }
             if (type_info == .@"union") {
                 inline for (type_info.@"union".fields) |field| {
                     var dest = @unionInit(Container, field.name, undefined);
@@ -39,18 +46,25 @@ pub fn Populate(Container: type) type {
                         Error.IncorrectType, Error.MissingKey => continue,
                         else => return e,
                     };
-                    break;
-                } else return Error.IncorrectType;
+                    return;
+                }
+                return Error.IncorrectType;
             }
             switch (value) {
                 .none => unreachable,
                 .table => |table_value| {
+                    if (Container == parse.Value.Table) {
+                        const duped = try value.dupeRecursive(allocator);
+                        errdefer duped.deinitRecursive(allocator);
+                        destination.* = duped.table;
+                        return;
+                    }
                     if (type_info != .@"struct") return Error.IncorrectType;
                     var field_idx: usize = 0;
                     errdefer for (0..field_idx) |i| {
                         inline for (0.., type_info.@"struct".fields) |j, field| {
                             if (i == j) {
-                                Populate(field.type).deinitRecursive(allocator, @field(destination, field.name));
+                                Populate(field.type).deinitRecursive(allocator, &@field(destination, field.name));
                             }
                         }
                     };
@@ -68,9 +82,10 @@ pub fn Populate(Container: type) type {
                 },
                 inline .array, .array_of_tables => |array_value, tag| {
                     if (type_info != .pointer or type_info.pointer.size != .slice) return Error.IncorrectType;
+                    if (Container == []const u8) return Error.IncorrectType;
                     var result: std.ArrayListUnmanaged(type_info.pointer.child) = try .initCapacity(allocator, array_value.items.len);
                     errdefer result.deinit(allocator);
-                    errdefer for (result.items) |elem| {
+                    errdefer for (result.items) |*elem| {
                         Populate(type_info.pointer.child).deinitRecursive(allocator, elem);
                     };
                     for (array_value.items) |inner_value| {
@@ -208,6 +223,8 @@ const TestDog = struct {
     age: i64,
 
     friends: []Friend,
+
+    any: parse.Value.Table,
 };
 
 test Populate {
@@ -215,6 +232,8 @@ test Populate {
         \\name = "Barney"
         \\breed = "unknown"
         \\age = 16
+        \\
+        \\any = {a=[{},{},{},{a=[[[[{b=[],c={d=[]}}]]]]}]}
         \\
         \\[[friends]]
         \\name = "Bo"
@@ -228,7 +247,7 @@ test Populate {
 
     var test_struct: TestDog = undefined;
     try Populate(TestDog).intoFromValueOwned(std.testing.allocator, &test_struct, .{ .table = doc.root_table });
-    defer Populate(TestDog).deinitRecursive(std.testing.allocator, test_struct);
+    defer Populate(TestDog).deinitRecursive(std.testing.allocator, &test_struct);
 
     try std.testing.expectEqualSlices(u8, "Barney", test_struct.name);
     try std.testing.expectEqualSlices(u8, "unknown", test_struct.breed);
