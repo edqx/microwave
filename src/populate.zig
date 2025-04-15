@@ -215,7 +215,12 @@ test Populate {
         \\name = "Barney"
         \\breed = "unknown"
         \\age = 16
-        \\friends = [ { name = "Bo" }, { name = "Lala" } ]
+        \\
+        \\[[friends]]
+        \\name = "Bo"
+        \\
+        \\[[friends]]
+        \\name = "Lala"
     ;
 
     const doc = try parse.fromSlice(buf, std.testing.allocator);
@@ -226,4 +231,8 @@ test Populate {
     defer Populate(TestDog).deinitRecursive(std.testing.allocator, test_struct);
 
     try std.testing.expectEqualSlices(u8, "Barney", test_struct.name);
+    try std.testing.expectEqualSlices(u8, "unknown", test_struct.breed);
+    try std.testing.expectEqual(16, test_struct.age);
+    try std.testing.expectEqualSlices(u8, "Bo", test_struct.friends[0].name);
+    try std.testing.expectEqualSlices(u8, "Lala", test_struct.friends[1].name);
 }
