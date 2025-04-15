@@ -13,6 +13,7 @@ pub const Value = union(enum) {
         offset: ?[]const u8 = null,
     };
 
+    none: void,
     table: Table,
     array: Array,
     array_of_tables: ArrayOfTables,
@@ -24,6 +25,7 @@ pub const Value = union(enum) {
 
     pub fn deinitRecursive(self: *Value, allocator: std.mem.Allocator) void {
         switch (self.*) {
+            .none => {},
             .table => |*table_value| {
                 var values = table_value.valueIterator();
                 while (values.next()) |item_ptr| item_ptr.deinitRecursive(allocator);
@@ -182,7 +184,12 @@ pub fn Parser(ScannerType: type) type {
             };
         }
 
-        pub fn readTableAccessGetValuePtr(self: *ParserT, table: *Value.Table) !*Value {
+        pub const AccessMode = enum {
+            inline_table,
+            root,
+        };
+
+        pub fn readTableAccessGetValuePtr(self: *ParserT, table: *Value.Table, mode: AccessMode) !*Value {
             std.debug.assert(self.current_token.?.kind == .key);
 
             var parent_table: *Value.Table = table;
@@ -201,12 +208,28 @@ pub fn Parser(ScannerType: type) type {
                         const nested_table_value = try parent_table.getOrPut(self.allocator, key_contents);
                         errdefer _ = parent_table.remove(key_contents);
                         if (nested_table_value.found_existing) {
-                            if (nested_table_value.value_ptr.* != .table) return Error.InvalidKeyAccess;
+                            switch (mode) {
+                                .inline_table => {
+                                    if (nested_table_value.value_ptr.* != .table) return Error.InvalidKeyAccess;
+                                    parent_table = &nested_table_value.value_ptr.table;
+                                },
+                                .root => {
+                                    switch (nested_table_value.value_ptr.*) {
+                                        .table => |*table_value| {
+                                            parent_table = table_value;
+                                        },
+                                        .array_of_tables => |*array_of_tables_value| {
+                                            parent_table = &array_of_tables_value.items[array_of_tables_value.items.len - 1];
+                                        },
+                                        else => return Error.InvalidKeyAccess,
+                                    }
+                                },
+                            }
                         } else {
                             nested_table_value.value_ptr.* = .{ .table = .empty };
+                            parent_table = &nested_table_value.value_ptr.table;
                             created_table_value_root = nested_table_value.value_ptr;
                         }
-                        parent_table = &nested_table_value.value_ptr.table;
                         last_key_token = token;
                         expecting_key = false;
                     },
@@ -223,8 +246,8 @@ pub fn Parser(ScannerType: type) type {
 
             const key_contents = self.scanner.tokenContents(last_key_token);
             const last_value = try parent_table.getOrPut(self.allocator, key_contents);
-            if (last_value.found_existing) return Error.DuplicateKey;
 
+            if (!last_value.found_existing) last_value.value_ptr.* = .none;
             return last_value.value_ptr;
         }
 
@@ -251,7 +274,8 @@ pub fn Parser(ScannerType: type) type {
             try self.nextToken(); // skip inline table start token
             while (self.current_token) |token| : (try self.nextToken()) {
                 if (token.kind == .inline_table_end) break;
-                const table_entry = try self.readTableAccessGetValuePtr(&table_value.table);
+                const table_entry = try self.readTableAccessGetValuePtr(&table_value.table, .inline_table);
+                if (table_entry.* != .none) return Error.DuplicateKey;
                 table_entry.* = try self.readValue();
                 errdefer table_entry.deinitRecursive(self.allocator);
             }
@@ -292,25 +316,34 @@ pub fn Parser(ScannerType: type) type {
 
         pub fn readRootTableValue(self: *ParserT) !Value {
             var root_table: Value = .{ .table = .empty };
-            var active_table = &root_table;
+            var active_table = &root_table.table;
 
             try self.nextToken(); // skip inline table start token
             while (self.current_token) |_| : (try self.nextToken()) {
                 switch (self.current_token.?.kind) {
                     .table_start => {
                         try self.nextToken();
-                        const table_entry = try self.readTableAccessGetValuePtr(&root_table.table);
+                        const table_entry = try self.readTableAccessGetValuePtr(&root_table.table, .root);
+                        if (table_entry.* != .none) return Error.DuplicateKey;
                         table_entry.* = .{ .table = .empty };
-                        active_table = table_entry;
+                        active_table = &table_entry.table;
                     },
-                    .many_table_start => {},
+                    .many_table_start => {
+                        try self.nextToken();
+                        const many_entry = try self.readTableAccessGetValuePtr(&root_table.table, .root);
+                        if (many_entry.* == .none) {
+                            many_entry.* = .{ .array_of_tables = .empty };
+                        }
+                        try many_entry.array_of_tables.append(self.allocator, .empty);
+                        active_table = &many_entry.array_of_tables.items[many_entry.array_of_tables.items.len - 1];
+                    },
                     .key => {
-                        const table_entry = try self.readTableAccessGetValuePtr(&active_table.table);
+                        const table_entry = try self.readTableAccessGetValuePtr(active_table, .inline_table);
+                        if (table_entry.* != .none) return Error.DuplicateKey;
                         table_entry.* = try self.readValue();
                         errdefer table_entry.deinitRecursive(self.allocator);
                     },
                     else => {
-                        std.debug.print("got unexpected token: {}\n", .{self.current_token.?});
                         return Error.UnexpectedToken;
                     },
                 }
@@ -322,11 +355,22 @@ pub fn Parser(ScannerType: type) type {
 
 allocator: std.mem.Allocator,
 
-fn testKey(table: Value.Table, path: anytype, comptime value_type: std.meta.Tag(Value), value: @FieldType(Value, @tagName(value_type))) !void {
-    var parent = table;
+fn testKey(table_value: Value, path: anytype, comptime value_type: std.meta.Tag(Value), value: @FieldType(Value, @tagName(value_type))) !void {
+    var parent = table_value;
     inline for (0.., path) |i, part| {
         const is_last = i == path.len - 1;
-        const child = parent.get(part);
+        var child: ?Value = undefined;
+        if (@TypeOf(part) == comptime_int) {
+            try std.testing.expect(parent == .array or parent == .array_of_tables);
+            child = switch (parent) {
+                .array => parent.array.items[part],
+                .array_of_tables => .{ .table = parent.array_of_tables.items[part] },
+                else => unreachable,
+            };
+        } else {
+            try std.testing.expect(parent == .table);
+            child = parent.table.get(part);
+        }
         try std.testing.expect(child != null);
         if (is_last) {
             try std.testing.expect(std.meta.activeTag(child.?) == value_type);
@@ -336,8 +380,7 @@ fn testKey(table: Value.Table, path: anytype, comptime value_type: std.meta.Tag(
                 try std.testing.expectEqual(value, @field(child.?, @tagName(value_type)));
             }
         } else {
-            try std.testing.expect(child.? == .table);
-            parent = child.?.table;
+            parent = child.?;
         }
     }
 }
@@ -352,6 +395,21 @@ test Parser {
         \\head = "white"
         \\body = "brown"
         \\tail = "red"
+        \\
+        \\[[other_dog]]
+        \\name = "Bo"
+        \\colour = "White"
+        \\origin = "Egypt"
+        \\
+        \\[[other_dog]]
+        \\name = "Lala"
+        \\colour = "Black"
+        \\origin = "Serbia"
+        \\
+        \\[other_dog.colours]
+        \\head = "black"
+        \\body = "black"
+        \\tail = "black"
     ;
 
     var scanner = Scanner{ .buffer = buf };
@@ -360,11 +418,18 @@ test Parser {
     var root_table = try parser.readRootTableValue();
     defer root_table.deinitRecursive(std.testing.allocator);
 
-    try testKey(root_table.table, .{ "barney", "name" }, .string, "Barney");
-    try testKey(root_table.table, .{ "barney", "age" }, .integer, 16);
-    try testKey(root_table.table, .{ "barney", "breed" }, .string, "unknown");
+    try testKey(root_table, .{ "barney", "name" }, .string, "Barney");
+    try testKey(root_table, .{ "barney", "age" }, .integer, 16);
+    try testKey(root_table, .{ "barney", "breed" }, .string, "unknown");
 
-    try testKey(root_table.table, .{ "barney", "colours", "head" }, .string, "white");
-    try testKey(root_table.table, .{ "barney", "colours", "body" }, .string, "brown");
-    try testKey(root_table.table, .{ "barney", "colours", "tail" }, .string, "red");
+    try testKey(root_table, .{ "barney", "colours", "head" }, .string, "white");
+    try testKey(root_table, .{ "barney", "colours", "body" }, .string, "brown");
+    try testKey(root_table, .{ "barney", "colours", "tail" }, .string, "red");
+
+    try testKey(root_table, .{ "other_dog", 0, "name" }, .string, "Bo");
+    try testKey(root_table, .{ "other_dog", 1, "name" }, .string, "Lala");
+
+    try testKey(root_table, .{ "other_dog", 1, "colours", "head" }, .string, "black");
+    try testKey(root_table, .{ "other_dog", 1, "colours", "body" }, .string, "black");
+    try testKey(root_table, .{ "other_dog", 1, "colours", "tail" }, .string, "black");
 }
