@@ -404,6 +404,17 @@ fn consumeNumberLiteralToken(self: *Scanner) !?Token {
     if (sign_range == null) {
         if (try self.consumeUnsignedIntegerBaseNumber()) |range| return range.token(.literal_base_integer);
     }
+
+    if (try self.consumeSlice("nan")) |nan_range| {
+        const special_range = if (sign_range) |range| range.expand(nan_range) else nan_range;
+        return special_range.token(.literal_nan);
+    }
+
+    if (try self.consumeSlice("inf")) |inf_range| {
+        const special_range = if (sign_range) |range| range.expand(inf_range) else inf_range;
+        return special_range.token(.literal_inf);
+    }
+
     const digits_range = try self.consumeDigitGroups(isBase10Digit) orelse
         return if (sign_range != null) Error.UnexpectedToken else null;
 
@@ -509,17 +520,6 @@ pub fn next(self: *Scanner) !?Token {
 
             if (try self.consumeNumberLiteralToken()) |number_token| {
                 return number_token;
-            }
-
-            if (try self.consumeSlice("inf")) |range| {
-                return range.token(.literal_inf);
-            }
-
-            if (try self.consumeSlice("nan") orelse
-                try self.consumeSlice("+nan") orelse
-                try self.consumeSlice("-nan")) |range|
-            {
-                return range.token(.literal_nan);
             }
 
             if (try self.consumeSlice("true") orelse try self.consumeSlice("false")) |range| {
