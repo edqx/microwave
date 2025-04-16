@@ -6,10 +6,13 @@ pub const Error = error{ UnexpectedEndOfBuffer, UnexpectedByte };
 
 pub const Token = struct {
     pub const Kind = enum {
-        ignored,
+        whitespace,
         comment,
+        newline,
+        delimeter,
         key,
         access,
+        equals,
         literal_string,
         literal_base_integer,
         literal_integer,
@@ -21,12 +24,8 @@ pub const Token = struct {
         literal_local_date_time,
         literal_local_date,
         literal_local_time,
-        array_start,
-        array_end,
-        table_start,
-        table_end,
-        many_table_start,
-        many_table_end,
+        array_start_or_table_start,
+        array_end_or_table_end,
         inline_table_start,
         inline_table_end,
     };
@@ -58,16 +57,6 @@ pub const Token = struct {
     range: Range,
 };
 
-pub const State = enum {
-    expect_key_or_table,
-    expect_key_with_access,
-    expect_value,
-    expect_table_key,
-    expect_table_key_with_access,
-    expect_many_table_key,
-    expect_many_table_key_with_access,
-};
-
 const StringKind = enum {
     single_line,
     multiple_lines,
@@ -76,9 +65,6 @@ const StringKind = enum {
 buffer: []const u8,
 can_request_more: bool = false,
 cursor: usize = 0,
-
-state: State = .expect_key_or_table,
-array_depth: usize = 0,
 
 fn isCommentChar(b: u8) bool {
     return b == '#';
@@ -315,7 +301,12 @@ fn consumeCommentLine(self: *Scanner) !?Token.Range {
     return try self.consumeMany(isNotNewlineChar);
 }
 
-fn consumeString(self: *Scanner, kind: StringKind) !Token.Range {
+fn consumeString(self: *Scanner, kind: StringKind) !?Token.Range {
+    switch (kind) {
+        .single_line => if (try self.consumeSingle(isStringChar) == null) return null,
+        .multiple_lines => if (try self.consumeSlice("\"\"\"") == null) return null,
+    }
+
     var escape = false;
     var range = try self.consumeNone();
     while (true) {
@@ -324,14 +315,11 @@ fn consumeString(self: *Scanner, kind: StringKind) !Token.Range {
         }
         switch (kind) {
             .single_line => {
-                if (isNewlineChar(try self.peekSingle())) return range;
+                if (isNewlineChar(try self.peekSingle())) return Error.UnexpectedByte;
                 if (!escape and try self.consumeSingle(isStringChar) != null) return range;
             },
             .multiple_lines => {
-                if (!escape and std.mem.eql(u8, try self.peekMany(3), "\"\"\"")) {
-                    self.cursor += 3;
-                    return range;
-                }
+                if (!escape and try self.consumeSlice("\"\"\"") != null) return range;
             },
         }
         escape = !escape and isStringEscapeChar(try self.peekSingle());
@@ -339,13 +327,6 @@ fn consumeString(self: *Scanner, kind: StringKind) !Token.Range {
         escape = false;
     }
     unreachable;
-}
-
-fn consumeKeyPart(self: *Scanner) !?Token.Range {
-    return if (try self.consumeMany(isKeyChar)) |range| range else string_key: {
-        if (try self.consumeSingle(isStringChar) == null) return null;
-        break :string_key try self.consumeString(.single_line);
-    };
 }
 
 fn consumeDigitGroups(self: *Scanner, digit_predicate: fn (b: u8) bool) !?Token.Range {
@@ -454,155 +435,32 @@ fn consumeNumberLiteralToken(self: *Scanner) !?Token {
     return integer_part_range.token(.literal_integer);
 }
 
-fn statefulConsumeTableClose(self: *Scanner) !?Token.Range {
-    const table_close_range = try self.consumeSingle(isTableCloseChar) orelse return null;
-    if (self.state == .expect_many_table_key_with_access) {
-        const many_table_close_range = try self.consumeSingle(isTableCloseChar) orelse return Error.UnexpectedByte;
-        self.state = .expect_key_or_table;
-        return table_close_range.expand(many_table_close_range);
-    }
-    self.state = .expect_key_or_table;
-    return table_close_range;
-}
-
-fn statefulConsumeRoot(self: *Scanner) !Token {
-    if (try self.consumeMany(isWhitespaceChar)) |range| return range.token(.ignored);
-    if (try self.consumeCommentLine()) |range| return range.token(.comment);
-    const key_range = try self.consumeKeyPart() orelse {
-        const table_open_range = try self.consumeSingle(isTableOpenChar) orelse return Error.UnexpectedByte;
-
-        if (try self.consumeSingle(isTableOpenChar)) |many_table_open_range| {
-            self.state = .expect_many_table_key;
-            errdefer self.state = .expect_key_or_table;
-            return table_open_range.expand(many_table_open_range).token(.many_table_start);
-        }
-        self.state = .expect_table_key;
-        errdefer self.state = .expect_key_or_table;
-        return table_open_range.token(.table_start);
-    };
-
-    self.state = .expect_key_with_access;
-    errdefer self.state = .expect_key_or_table;
-    return key_range.token(.key);
-}
-
-pub fn nextRaw(self: *Scanner) !?Token {
+pub fn next(self: *Scanner) !?Token {
     const original_pos = self.cursor;
     errdefer self.cursor = original_pos;
-    switch (self.state) {
-        .expect_key_or_table => {
-            return self.statefulConsumeRoot() catch |e| switch (e) {
-                Error.UnexpectedEndOfBuffer => return null,
-                else => return e,
-            };
-        },
-        .expect_key_with_access => {
-            if (try self.consumeMany(isSpaceChar)) |range| return range.token(.ignored);
-            if (try self.consumeCommentLine()) |range| return range.token(.comment);
-            if (try self.consumeSingle(isAccessChar)) |range| return range.token(.access);
-            if (try self.consumeSingle(isEqualsChar) != null) {
-                self.state = .expect_value;
-                errdefer self.state = .expect_key_with_access;
-                return try self.nextRaw();
-            }
-            const key_range = try self.consumeKeyPart() orelse return Error.UnexpectedByte;
-            return key_range.token(.key);
-        },
-        .expect_value => {
-            if (try self.consumeMany(isSpaceChar)) |range| return range.token(.ignored);
-            if (try self.consumeCommentLine()) |range| return range.token(.comment);
 
-            if (try self.consumeSingle(isArrayOpenChar)) |range| {
-                self.array_depth += 1;
-                return range.token(.array_start);
-            }
-
-            if (try self.consumeSingle(isArrayCloseChar)) |range| {
-                if (self.array_depth == 0) return Error.UnexpectedByte;
-                self.array_depth -= 1;
-                return range.token(.array_end);
-            }
-
-            if (try self.consumeSingle(isInlineTableOpenChar)) |range| return range.token(.inline_table_start);
-            if (try self.consumeSingle(isInlineTableCloseChar)) |range| return range.token(.inline_table_end);
-            if (try self.consumeSingle(isAccessChar)) |range| return range.token(.access);
-            if (try self.consumeSingle(isEqualsChar) != null) return try self.nextRaw();
-
-            if (try self.consumeSingle(isNewlineChar)) |range| {
-                if (self.array_depth == 0) {
-                    self.state = .expect_key_or_table;
-                    errdefer self.state = .expect_value;
-                }
-                const more_whitespace_range = try self.consumeMany(isWhitespaceChar) orelse return range.token(.ignored);
-                return range.expand(more_whitespace_range).token(.ignored);
-            } else if (try self.consumeSingle(isDelimeterChar)) |range| {
-                _ = range;
-                return try self.nextRaw();
-            }
-
-            if (try self.consumeNumberLiteralToken()) |number_token| {
-                return number_token;
-            }
-
-            if (try self.consumeDateTimeLiteralToken()) |datetime_token| {
-                return datetime_token;
-            }
-
-            if (try self.consumeSlice("\"\"\"") != null) {
-                const string_range = try self.consumeString(.multiple_lines);
-                return string_range.token(.literal_string);
-            }
-
-            if (try self.consumeSingle(isStringChar) != null) {
-                const string_range = try self.consumeString(.single_line);
-                return string_range.token(.literal_string);
-            }
-
-            if (try self.consumeSlice("true") orelse try self.consumeSlice("false")) |range| {
-                return range.token(.literal_bool);
-            }
-
-            const key_range = try self.consumeKeyPart() orelse return if (self.reachedEnd(0)) null else Error.UnexpectedByte;
-            return key_range.token(.key);
-        },
-        .expect_table_key, .expect_many_table_key => |original_state| {
-            if (try self.consumeMany(isSpaceChar)) |range| return range.token(.ignored);
-            if (try self.consumeCommentLine()) |range| return range.token(.comment);
-            const key_range = try self.consumeKeyPart() orelse return Error.UnexpectedByte;
-            self.state = switch (self.state) {
-                .expect_table_key => .expect_table_key_with_access,
-                .expect_many_table_key => .expect_many_table_key_with_access,
-                else => unreachable,
-            };
-            errdefer self.state = original_state;
-            return key_range.token(.key);
-        },
-        .expect_table_key_with_access, .expect_many_table_key_with_access => |original_state| {
-            if (try self.consumeMany(isSpaceChar)) |range| return range.token(.ignored);
-            if (try self.consumeCommentLine()) |range| return range.token(.comment);
-            if (try self.consumeSingle(isAccessChar)) |range| return range.token(.access);
-            if (try self.statefulConsumeTableClose()) |range| {
-                self.state = .expect_key_or_table;
-                errdefer self.state = original_state;
-                return range.token(switch (original_state) {
-                    .expect_table_key_with_access => .table_end,
-                    .expect_many_table_key_with_access => .many_table_end,
-                    else => unreachable,
-                });
-            }
-            const key_range = try self.consumeKeyPart() orelse return Error.UnexpectedByte;
-            return key_range.token(.key);
-        },
+    if (try self.consumeMany(isSpaceChar)) |range| return range.token(.whitespace);
+    if (try self.consumeMany(isWhitespaceChar)) |range| return range.token(.newline);
+    if (try self.consumeCommentLine()) |range| return range.token(.comment);
+    if (try self.consumeSingle(isAccessChar)) |range| return range.token(.access);
+    if (try self.consumeSingle(isEqualsChar)) |range| return range.token(.equals);
+    if (try self.consumeSingle(isArrayOpenChar)) |range| return range.token(.array_start_or_table_start);
+    if (try self.consumeSingle(isArrayCloseChar)) |range| return range.token(.array_end_or_table_end);
+    if (try self.consumeSingle(isInlineTableOpenChar)) |range| return range.token(.inline_table_start);
+    if (try self.consumeSingle(isInlineTableCloseChar)) |range| return range.token(.inline_table_end);
+    if (try self.consumeSingle(isDelimeterChar)) |range| return range.token(.delimeter);
+    const restore_pos = self.cursor;
+    if (try self.consumeDateTimeLiteralToken()) |date_time_token| {
+        return date_time_token;
+    } else {
+        self.cursor = restore_pos;
     }
-}
-
-pub fn next(self: *Scanner) !?Token {
-    return while (try self.nextRaw()) |token| {
-        switch (token.kind) {
-            .ignored, .comment => continue,
-            else => break token,
-        }
-    } else null;
+    if (try self.consumeNumberLiteralToken()) |number_token| return number_token;
+    if (try self.consumeString(.multiple_lines)) |string_range| return string_range.token(.literal_string);
+    if (try self.consumeString(.single_line)) |string_range| return string_range.token(.literal_string);
+    if (try self.consumeSlice("true") orelse try self.consumeSlice("false")) |range| return range.token(.literal_bool);
+    if (try self.consumeMany(isKeyChar)) |range| return range.token(.key);
+    return if (self.reachedEnd(0)) null else Error.UnexpectedByte;
 }
 
 pub fn tokenContents(self: *Scanner, token: Token) []const u8 {
@@ -647,71 +505,25 @@ fn expectToken(token: ?Token, kind: Token.Kind) !void {
 }
 
 fn testAnyScanner(scanner: anytype) !void {
-    try expectToken(try scanner.nextRaw(), .comment);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .key);
-    try expectToken(try scanner.nextRaw(), .literal_string);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .key);
-    try expectToken(try scanner.nextRaw(), .array_start);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .literal_string);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .literal_string);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .literal_string);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .array_end);
-
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .key);
-    try expectToken(try scanner.nextRaw(), .literal_string);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .key);
-    try expectToken(try scanner.nextRaw(), .literal_string);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .comment);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .key);
-    try expectToken(try scanner.nextRaw(), .literal_string);
-
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .many_table_start);
-    try expectToken(try scanner.nextRaw(), .key);
-    try expectToken(try scanner.nextRaw(), .many_table_end);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .key);
-    try expectToken(try scanner.nextRaw(), .literal_string);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .key);
-    try expectToken(try scanner.nextRaw(), .literal_string);
-
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .many_table_start);
-    try expectToken(try scanner.nextRaw(), .key);
-    try expectToken(try scanner.nextRaw(), .many_table_end);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .key);
-    try expectToken(try scanner.nextRaw(), .literal_string);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .key);
-    try expectToken(try scanner.nextRaw(), .literal_string);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .key);
-    try expectToken(try scanner.nextRaw(), .array_start);
-    try expectToken(try scanner.nextRaw(), .literal_string);
-    try expectToken(try scanner.nextRaw(), .array_end);
-
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .many_table_start);
-    try expectToken(try scanner.nextRaw(), .key);
-    try expectToken(try scanner.nextRaw(), .many_table_end);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .key);
-    try expectToken(try scanner.nextRaw(), .literal_string);
-    try expectToken(try scanner.nextRaw(), .ignored);
-    try expectToken(try scanner.nextRaw(), .key);
-    try expectToken(try scanner.nextRaw(), .literal_string);
+    try expectToken(try scanner.next(), .comment);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .key);
+    try expectToken(try scanner.next(), .equals);
+    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .key);
+    try expectToken(try scanner.next(), .equals);
+    try expectToken(try scanner.next(), .array_start_or_table_start);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.next(), .delimeter);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.next(), .delimeter);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .array_end_or_table_end);
 }
 
 test Scanner {
@@ -765,29 +577,20 @@ pub fn BufferedReaderScanner(comptime buf_size: usize, comptime ReaderType: type
 
         fn adjustBufferNext(self: *BufferedReaderScannerT) BufferedReaderScannerT.Error!?Token {
             try self.adjustBuffer();
-            return try self.nextRawImpl();
+            return try self.nextImpl();
         }
 
-        fn nextRawImpl(self: *BufferedReaderScannerT) BufferedReaderScannerT.Error!?Token {
-            return self.scanner.nextRaw() catch |e| switch (e) {
+        fn nextImpl(self: *BufferedReaderScannerT) BufferedReaderScannerT.Error!?Token {
+            return self.scanner.next() catch |e| switch (e) {
                 error.UnexpectedEndOfBuffer => return try self.adjustBufferNext(),
                 else => return e,
             } orelse try self.adjustBufferNext();
         }
 
-        pub fn nextRaw(self: *BufferedReaderScannerT) !?Token {
-            var next_token_in_buffer = try self.nextRawImpl() orelse return null;
+        pub fn next(self: *BufferedReaderScannerT) !?Token {
+            var next_token_in_buffer = try self.nextImpl() orelse return null;
             next_token_in_buffer.range = next_token_in_buffer.range.offset(self.buffer_global_offset);
             return next_token_in_buffer;
-        }
-
-        pub fn next(self: *BufferedReaderScannerT) !?Token {
-            return while (try self.nextRaw()) |token| {
-                switch (token.kind) {
-                    .ignored, .comment => continue,
-                    else => break token,
-                }
-            } else null;
         }
 
         pub fn tokenContents(self: *BufferedReaderScannerT, token: Token) []const u8 {

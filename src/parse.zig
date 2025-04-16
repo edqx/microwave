@@ -118,7 +118,7 @@ pub fn Parser(ScannerType: type) type {
     return struct {
         const ParserT = @This();
 
-        pub const Error = std.mem.Allocator.Error || std.fmt.ParseIntError || std.fmt.ParseFloatError || ScannerType.Error || error{ UnexpectedToken, UnexpectedEof, InvalidKeyAccess, DuplicateKey };
+        pub const Error = std.mem.Allocator.Error || std.fmt.ParseIntError || std.fmt.ParseFloatError || ScannerType.Error || error{ UnexpectedToken, UnexpectedEof, UnexpectedEol, InvalidKeyAccess, DuplicateKey };
 
         allocator: std.mem.Allocator,
         scanner: *ScannerType,
@@ -127,6 +127,36 @@ pub fn Parser(ScannerType: type) type {
 
         pub fn nextToken(self: *ParserT) !void {
             self.current_token = try self.scanner.next();
+        }
+
+        fn assertCurrentToken(self: *ParserT, token_kind: Scanner.Token.Kind) void {
+            std.debug.assert(self.current_token != null and self.current_token.?.kind == token_kind);
+        }
+
+        pub fn consumeWhitespace(self: *ParserT) !void {
+            while (self.current_token) |token| {
+                if (token.kind == .whitespace) {
+                    try self.nextToken();
+                    continue;
+                }
+                return;
+            }
+        }
+
+        pub fn consumeToken(self: *ParserT, token_kind: Scanner.Token.Kind) !?Scanner.Token {
+            try self.consumeWhitespace();
+            const next_token = self.current_token orelse return null;
+            if (next_token.kind != token_kind) return null;
+            try self.nextToken();
+            return next_token;
+        }
+
+        pub fn expectToken(self: *ParserT, token_kind: Scanner.Token.Kind) !void {
+            if (try self.consumeToken(token_kind) == null) return Error.UnexpectedToken;
+        }
+
+        pub fn isEof(self: *ParserT) bool {
+            return self.current_token == null;
         }
 
         pub fn parseStringValueAlloc(self: ParserT, token_contents: []const u8) !Value {
@@ -249,60 +279,54 @@ pub fn Parser(ScannerType: type) type {
             root,
         };
 
-        pub fn readTableAccessGetValuePtr(self: *ParserT, table: *Value.Table, mode: AccessMode) !*Value {
-            std.debug.assert(self.current_token.?.kind == .key);
-
+        pub fn consumeTableAccessGetValuePtr(self: *ParserT, table: *Value.Table, mode: AccessMode) !?*Value {
+            const first_key_token = try self.consumeToken(.key) orelse return null;
             var parent_table: *Value.Table = table;
-            var last_key_token: Scanner.Token = self.current_token.?;
+            var last_key_token: Scanner.Token = first_key_token;
 
             var created_table_value_root: ?*Value = null;
             errdefer if (created_table_value_root) |table_value| table_value.deinitRecursive(self.allocator);
 
             var expecting_key = false;
-            try self.nextToken(); // skip first key
-            while (self.current_token) |token| : (try self.nextToken()) {
-                switch (token.kind) {
-                    .key => {
-                        if (!expecting_key) return Error.UnexpectedToken;
-                        const key_contents = self.scanner.tokenContents(last_key_token);
-                        const nested_table_value = try parent_table.getOrPut(self.allocator, key_contents);
-                        errdefer _ = parent_table.remove(key_contents);
-                        if (nested_table_value.found_existing) {
-                            switch (mode) {
-                                .inline_table => {
-                                    if (nested_table_value.value_ptr.* != .table) return Error.InvalidKeyAccess;
-                                    parent_table = &nested_table_value.value_ptr.table;
-                                },
-                                .root => {
-                                    switch (nested_table_value.value_ptr.*) {
-                                        .table => |*table_value| {
-                                            parent_table = table_value;
-                                        },
-                                        .array_of_tables => |*array_of_tables_value| {
-                                            parent_table = &array_of_tables_value.items[array_of_tables_value.items.len - 1];
-                                        },
-                                        else => return Error.InvalidKeyAccess,
-                                    }
-                                },
-                            }
-                        } else {
-                            nested_table_value.value_ptr.* = .{ .table = .empty };
-                            parent_table = &nested_table_value.value_ptr.table;
-                            created_table_value_root = nested_table_value.value_ptr;
+            while (true) {
+                if (try self.consumeToken(.key)) |key_token| {
+                    if (!expecting_key) return Error.UnexpectedToken;
+                    const key_contents = self.scanner.tokenContents(last_key_token);
+                    const nested_table_value = try parent_table.getOrPut(self.allocator, key_contents);
+                    errdefer _ = parent_table.remove(key_contents);
+                    if (nested_table_value.found_existing) {
+                        switch (mode) {
+                            .inline_table => {
+                                if (nested_table_value.value_ptr.* != .table) return Error.InvalidKeyAccess;
+                                parent_table = &nested_table_value.value_ptr.table;
+                            },
+                            .root => {
+                                switch (nested_table_value.value_ptr.*) {
+                                    .table => |*table_value| {
+                                        parent_table = table_value;
+                                    },
+                                    .array_of_tables => |*array_of_tables_value| {
+                                        parent_table = &array_of_tables_value.items[array_of_tables_value.items.len - 1];
+                                    },
+                                    else => return Error.InvalidKeyAccess,
+                                }
+                            },
                         }
-                        last_key_token = token;
-                        expecting_key = false;
-                    },
-                    .access => {
-                        if (expecting_key) return Error.UnexpectedToken;
-                        expecting_key = true;
-                    },
-                    else => {
-                        if (expecting_key) return Error.UnexpectedToken;
-                        break;
-                    },
+                    } else {
+                        nested_table_value.value_ptr.* = .{ .table = .empty };
+                        parent_table = &nested_table_value.value_ptr.table;
+                        created_table_value_root = nested_table_value.value_ptr;
+                    }
+                    last_key_token = key_token;
+                    expecting_key = false;
+                } else if (try self.consumeToken(.access) != null) {
+                    if (expecting_key) return Error.UnexpectedToken;
+                    expecting_key = true;
+                } else {
+                    if (expecting_key) return Error.UnexpectedToken;
+                    break;
                 }
-            } else return Error.UnexpectedEof;
+            }
 
             const key_contents = self.scanner.tokenContents(last_key_token);
             const last_value = try parent_table.getOrPut(self.allocator, key_contents);
@@ -311,52 +335,64 @@ pub fn Parser(ScannerType: type) type {
             return last_value.value_ptr;
         }
 
-        pub fn readArrayValue(self: *ParserT) !Value {
-            std.debug.assert(self.current_token.?.kind == .array_start);
+        pub fn consumeArrayValue(self: *ParserT) !?Value {
+            if (try self.consumeToken(.array_start_or_table_start) == null) return null;
 
             var array_value: Value = .{ .array = .empty };
             errdefer array_value.deinitRecursive(self.allocator);
 
-            try self.nextToken(); // skip array start token
-            while (self.current_token) |token| : (try self.nextToken()) {
-                if (token.kind == .array_end) break;
+            var i: usize = 0;
+            while (true) : (i += 1) {
+                _ = try self.consumeToken(.newline);
+                if (try self.consumeToken(.array_end_or_table_end) != null) break;
+                if (i > 0) try self.expectToken(.delimeter);
+                _ = try self.consumeToken(.newline);
                 try array_value.array.append(self.allocator, try self.readValue());
             }
+
             return array_value;
         }
 
-        pub fn readInlineTableValue(self: *ParserT) !Value {
-            std.debug.assert(self.current_token.?.kind == .inline_table_start);
+        pub fn consumeInlineTableValue(self: *ParserT) !?Value {
+            if (try self.consumeToken(.inline_table_start) == null) return null;
 
             var table_value: Value = .{ .table = .empty };
             errdefer table_value.deinitRecursive(self.allocator);
 
-            try self.nextToken(); // skip inline table start token
-            while (self.current_token) |token| : (try self.nextToken()) {
-                if (token.kind == .inline_table_end) break;
-                const table_entry = try self.readTableAccessGetValuePtr(&table_value.table, .inline_table);
+            var i: usize = 0;
+            while (true) : (i += 1) {
+                if (try self.consumeToken(.inline_table_end) != null) break;
+                if (i > 0) try self.expectToken(.delimeter);
+                const table_entry = try self.consumeTableAccessGetValuePtr(&table_value.table, .inline_table) orelse
+                    return Error.UnexpectedToken;
                 if (table_entry.* != .none) return Error.DuplicateKey;
+                try self.expectToken(.equals);
                 table_entry.* = try self.readValue();
                 errdefer table_entry.deinitRecursive(self.allocator);
             }
+
             return table_value;
         }
 
         pub fn readValue(self: *ParserT) Error!Value {
+            try self.consumeWhitespace();
             const token_contents = self.scanner.tokenContents(self.current_token.?);
             const value = switch (self.current_token.?.kind) {
-                .ignored,
-                .comment,
-                .table_start,
-                .table_end,
-                .many_table_start,
-                .many_table_end,
+                .whitespace,
                 => unreachable,
+                .comment,
+                .newline,
+                .delimeter,
                 .key,
                 .access,
+                .equals,
+                .array_start_or_table_start,
+                .array_end_or_table_end,
+                .inline_table_start,
                 .inline_table_end,
-                .array_end,
-                => return Error.UnexpectedToken,
+                => return try self.consumeInlineTableValue() orelse
+                    try self.consumeArrayValue() orelse
+                    return Error.UnexpectedToken,
                 .literal_string => try self.parseStringValueAlloc(token_contents),
                 .literal_base_integer => try self.parseBaseIntegerValue(token_contents),
                 .literal_integer => try self.parseIntegerValue(token_contents),
@@ -368,9 +404,8 @@ pub fn Parser(ScannerType: type) type {
                 .literal_local_date_time => try self.parseLocalDateTimeValueAlloc(token_contents),
                 .literal_local_date => try self.parseLocalDateValueAlloc(token_contents),
                 .literal_local_time => try self.parseLocalTimeValueAlloc(token_contents),
-                .array_start => try self.readArrayValue(),
-                .inline_table_start => try self.readInlineTableValue(),
             };
+            try self.nextToken();
             return value;
         }
 
@@ -378,34 +413,39 @@ pub fn Parser(ScannerType: type) type {
             var root_table: Value = .{ .table = .empty };
             var active_table = &root_table.table;
 
-            try self.nextToken(); // skip inline table start token
-            while (self.current_token) |_| : (try self.nextToken()) {
-                switch (self.current_token.?.kind) {
-                    .table_start => {
-                        try self.nextToken();
-                        const table_entry = try self.readTableAccessGetValuePtr(&root_table.table, .root);
+            try self.nextToken();
+
+            while (true) {
+                if (try self.consumeToken(.array_start_or_table_start) != null) {
+                    const is_many_table = try self.consumeToken(.array_start_or_table_start) != null;
+
+                    const table_entry = try self.consumeTableAccessGetValuePtr(&root_table.table, .root) orelse return Error.UnexpectedToken;
+                    if (is_many_table) {
+                        if (table_entry.* == .none) {
+                            table_entry.* = .{ .array_of_tables = .empty };
+                        }
+                        try table_entry.array_of_tables.append(self.allocator, .empty);
+                        active_table = &table_entry.array_of_tables.items[table_entry.array_of_tables.items.len - 1];
+                        if (try self.consumeToken(.array_end_or_table_end) == null) return Error.UnexpectedToken;
+                    } else {
                         if (table_entry.* != .none) return Error.DuplicateKey;
                         table_entry.* = .{ .table = .empty };
                         active_table = &table_entry.table;
-                    },
-                    .many_table_start => {
-                        try self.nextToken();
-                        const many_entry = try self.readTableAccessGetValuePtr(&root_table.table, .root);
-                        if (many_entry.* == .none) {
-                            many_entry.* = .{ .array_of_tables = .empty };
-                        }
-                        try many_entry.array_of_tables.append(self.allocator, .empty);
-                        active_table = &many_entry.array_of_tables.items[many_entry.array_of_tables.items.len - 1];
-                    },
-                    .key => {
-                        const table_entry = try self.readTableAccessGetValuePtr(active_table, .inline_table);
-                        if (table_entry.* != .none) return Error.DuplicateKey;
-                        table_entry.* = try self.readValue();
-                        errdefer table_entry.deinitRecursive(self.allocator);
-                    },
-                    else => {
-                        return Error.UnexpectedToken;
-                    },
+                    }
+                    if (try self.consumeToken(.array_end_or_table_end) == null) return Error.UnexpectedToken;
+                } else if (try self.consumeTableAccessGetValuePtr(active_table, .inline_table)) |table_entry| {
+                    if (table_entry.* != .none) return Error.DuplicateKey;
+                    if (try self.consumeToken(.equals) == null) return Error.UnexpectedToken;
+                    table_entry.* = try self.readValue();
+                    errdefer table_entry.deinitRecursive(self.allocator);
+                } else if (try self.consumeToken(.comment) != null) {
+                    continue;
+                } else if (self.isEof()) {
+                    break;
+                } else if (try self.consumeToken(.newline) != null) {
+                    continue;
+                } else {
+                    return Error.UnexpectedToken;
                 }
             }
             return root_table.table;
@@ -509,6 +549,8 @@ test Parser {
         \\barney.name = "Barney"
         \\barney.age = 16
         \\barney.breed = "unknown"
+        \\
+        \\sprout = { name = "Sprout", age = 15, breed = "cairn-terrier x jack russell" }
         \\
         \\[barney.colours]
         \\head = "white"
