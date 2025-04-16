@@ -78,6 +78,7 @@ can_request_more: bool = false,
 cursor: usize = 0,
 
 state: State = .expect_key_or_table,
+array_depth: usize = 0,
 
 fn isCommentChar(b: u8) bool {
     return b == '#';
@@ -510,16 +511,28 @@ pub fn nextRaw(self: *Scanner) !?Token {
         .expect_value => {
             if (try self.consumeMany(isSpaceChar)) |range| return range.token(.ignored);
             if (try self.consumeCommentLine()) |range| return range.token(.comment);
-            if (try self.consumeSingle(isArrayOpenChar)) |range| return range.token(.array_start);
-            if (try self.consumeSingle(isArrayCloseChar)) |range| return range.token(.array_end);
+
+            if (try self.consumeSingle(isArrayOpenChar)) |range| {
+                self.array_depth += 1;
+                return range.token(.array_start);
+            }
+
+            if (try self.consumeSingle(isArrayCloseChar)) |range| {
+                if (self.array_depth == 0) return Error.UnexpectedByte;
+                self.array_depth -= 1;
+                return range.token(.array_end);
+            }
+
             if (try self.consumeSingle(isInlineTableOpenChar)) |range| return range.token(.inline_table_start);
             if (try self.consumeSingle(isInlineTableCloseChar)) |range| return range.token(.inline_table_end);
             if (try self.consumeSingle(isAccessChar)) |range| return range.token(.access);
             if (try self.consumeSingle(isEqualsChar) != null) return try self.nextRaw();
 
             if (try self.consumeSingle(isNewlineChar)) |range| {
-                self.state = .expect_key_or_table;
-                errdefer self.state = .expect_value;
+                if (self.array_depth == 0) {
+                    self.state = .expect_key_or_table;
+                    errdefer self.state = .expect_value;
+                }
                 const more_whitespace_range = try self.consumeMany(isWhitespaceChar) orelse return range.token(.ignored);
                 return range.expand(more_whitespace_range).token(.ignored);
             } else if (try self.consumeSingle(isDelimeterChar)) |range| {
@@ -599,7 +612,11 @@ pub fn tokenContents(self: *Scanner, token: Token) []const u8 {
 const test_buf: []const u8 =
     \\# this is an example task
     \\name="Write a Shopping List"
-    \\tags=["personal","weekly", "barney"]
+    \\tags=[
+    \\  "personal",
+    \\  "weekly",
+    \\  "barney"
+    \\]
     \\
     \\assigned_to="everyone"
     \\priority="medium" # we've done this
@@ -637,10 +654,13 @@ fn testAnyScanner(scanner: anytype) !void {
     try expectToken(try scanner.nextRaw(), .ignored);
     try expectToken(try scanner.nextRaw(), .key);
     try expectToken(try scanner.nextRaw(), .array_start);
-    try expectToken(try scanner.nextRaw(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .ignored);
     try expectToken(try scanner.nextRaw(), .literal_string);
     try expectToken(try scanner.nextRaw(), .ignored);
     try expectToken(try scanner.nextRaw(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .ignored);
+    try expectToken(try scanner.nextRaw(), .literal_string);
+    try expectToken(try scanner.nextRaw(), .ignored);
     try expectToken(try scanner.nextRaw(), .array_end);
 
     try expectToken(try scanner.nextRaw(), .ignored);
