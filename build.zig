@@ -15,5 +15,5 @@ pub fn build(b: *std.Build) !void {
     });
 
     const test_step = b.step("test", "Test Microwave");
-    test_step.dependOn(&test_mod.step);
+    test_step.dependOn(&b.addRunArtifact(test_mod).step);
 }
