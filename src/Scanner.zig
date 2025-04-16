@@ -524,6 +524,72 @@ fn testAnyScanner(scanner: anytype) !void {
     try expectToken(try scanner.next(), .literal_string);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .array_end_or_table_end);
+
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .key);
+    try expectToken(try scanner.next(), .equals);
+    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .key);
+    try expectToken(try scanner.next(), .equals);
+    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.next(), .whitespace);
+    try expectToken(try scanner.next(), .comment);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .key);
+    try expectToken(try scanner.next(), .equals);
+    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.next(), .newline);
+
+    try expectToken(try scanner.next(), .array_start_or_table_start);
+    try expectToken(try scanner.next(), .array_start_or_table_start);
+    try expectToken(try scanner.next(), .key);
+    try expectToken(try scanner.next(), .array_end_or_table_end);
+    try expectToken(try scanner.next(), .array_end_or_table_end);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .key);
+    try expectToken(try scanner.next(), .equals);
+    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .key);
+    try expectToken(try scanner.next(), .equals);
+    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.next(), .newline);
+
+    try expectToken(try scanner.next(), .array_start_or_table_start);
+    try expectToken(try scanner.next(), .array_start_or_table_start);
+    try expectToken(try scanner.next(), .key);
+    try expectToken(try scanner.next(), .array_end_or_table_end);
+    try expectToken(try scanner.next(), .array_end_or_table_end);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .key);
+    try expectToken(try scanner.next(), .equals);
+    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .key);
+    try expectToken(try scanner.next(), .equals);
+    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .key);
+    try expectToken(try scanner.next(), .equals);
+    try expectToken(try scanner.next(), .array_start_or_table_start);
+    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.next(), .array_end_or_table_end);
+    try expectToken(try scanner.next(), .newline);
+
+    try expectToken(try scanner.next(), .array_start_or_table_start);
+    try expectToken(try scanner.next(), .array_start_or_table_start);
+    try expectToken(try scanner.next(), .key);
+    try expectToken(try scanner.next(), .array_end_or_table_end);
+    try expectToken(try scanner.next(), .array_end_or_table_end);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .key);
+    try expectToken(try scanner.next(), .equals);
+    try expectToken(try scanner.next(), .literal_string);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .key);
+    try expectToken(try scanner.next(), .equals);
+    try expectToken(try scanner.next(), .literal_string);
 }
 
 test Scanner {
