@@ -11,4 +11,4 @@ This parser should be spec compliant.
 - [x] Populate dynamic values
 
 ## License
-All microwave code s under the MIT license.
+All microwave code is under the MIT license.
