@@ -151,7 +151,7 @@ try microwave.stringify.writeTable(allocator, root_table, file.writer());
 > [!NOTE]
 > There's no need to de-init anything, the allocator is for temporary allocations.
 
-### Scannner API
+### Scanner API
 As a low level API, Microwave also provides the ability to scan through a document
 and iterate through individual tokens.
 
