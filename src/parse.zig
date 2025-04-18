@@ -484,7 +484,7 @@ pub fn fromReaderOwned(arena: std.mem.Allocator, reader: anytype) !Value.Table {
     return try fromScannerOwned(arena, &scanner);
 }
 
-pub fn fromScanner(scanner: anytype, gpa: std.mem.Allocator) !Document {
+pub fn fromScanner(gpa: std.mem.Allocator, scanner: anytype) !Document {
     var arena = std.heap.ArenaAllocator.init(gpa);
     errdefer arena.deinit();
 
@@ -494,7 +494,7 @@ pub fn fromScanner(scanner: anytype, gpa: std.mem.Allocator) !Document {
     };
 }
 
-pub fn fromSlice(slice: []const u8, gpa: std.mem.Allocator) !Document {
+pub fn fromSlice(gpa: std.mem.Allocator, slice: []const u8) !Document {
     var arena = std.heap.ArenaAllocator.init(gpa);
     errdefer arena.deinit();
 
@@ -504,7 +504,7 @@ pub fn fromSlice(slice: []const u8, gpa: std.mem.Allocator) !Document {
     };
 }
 
-pub fn fromReader(reader: anytype, gpa: std.mem.Allocator) !Document {
+pub fn fromReader(gpa: std.mem.Allocator, reader: anytype) !Document {
     var arena = std.heap.ArenaAllocator.init(gpa);
     errdefer arena.deinit();
 
