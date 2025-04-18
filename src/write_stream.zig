@@ -12,10 +12,10 @@ pub fn isBareKey(key_name: []const u8) bool {
 }
 
 pub const Options = struct {
-    pub const Check = enum {
-        arbitrary,
-        none,
-    };
+    // pub const Check = enum {
+    //     arbitrary,
+    //     none,
+    // };
 
     pub const DateTimeSeparator = enum {
         t,
@@ -30,7 +30,7 @@ pub const Options = struct {
     newlines: Newlines = .lf,
     unicode_full_escape_strings: bool = false,
     format_float_options: std.fmt.format_float.FormatOptions = .{},
-    check_depth: Check = .arbitrary,
+    // check_depth: Check = .arbitrary,
     date_time_separator: DateTimeSeparator = .t,
 };
 
@@ -71,6 +71,26 @@ pub fn WriteStream(WriterT: type, comptime options: Options) type {
         }
 
         pub fn writeStringRaw(self: *WriteStreamT, string: []const u8) !void {
+            if (options.unicode_full_escape_strings) {
+                const utf8_view = try std.unicode.Utf8View.init(string);
+                var codepoints = utf8_view.iterator();
+                while (codepoints.nextCodepoint()) |codepoint| {
+                    switch (codepoint) {
+                        std.ascii.control_code.bs => try self.underlying_writer.writeAll("\\b"),
+                        '\t' => try self.underlying_writer.writeAll("\\t"),
+                        '\n' => try self.underlying_writer.writeAll("\\n"),
+                        std.ascii.control_code.ff => try self.underlying_writer.writeAll("\\f"),
+                        '\r' => try self.underlying_writer.writeAll("\\r"),
+                        '"' => try self.underlying_writer.writeAll("\\\""),
+                        '\\' => try self.underlying_writer.writeAll("\\"),
+                        ' ', '#'...'[', ']'...'~' => try self.underlying_writer.writeByte(@as(u8, @intCast(codepoint))),
+                        else => {
+                            try self.underlying_writer.print("\\u{d:0>8}", .{codepoint});
+                        },
+                    }
+                }
+                return;
+            }
             for (string) |char| {
                 try self.underlying_writer.writeAll(switch (char) {
                     std.ascii.control_code.bs => "\\b",
@@ -100,7 +120,10 @@ pub fn WriteStream(WriterT: type, comptime options: Options) type {
         fn writeDelimeter(self: *WriteStreamT) !void {
             if (self.stack.items.len == 0) {
                 defer self.start = false;
-                if (!self.start) try self.underlying_writer.writeAll("\n");
+                if (!self.start) try self.underlying_writer.writeAll(switch (options.newlines) {
+                    .crlf => "\r\n",
+                    .lf => "\n",
+                });
                 return;
             }
             try self.underlying_writer.writeAll(switch (self.stack.getLast()) {
@@ -181,7 +204,10 @@ pub fn WriteStream(WriterT: type, comptime options: Options) type {
                 try self.underlying_writer.writeAll(date);
             }
             if (date_time.time) |time| {
-                if (date_time.date != null) try self.underlying_writer.writeAll("T");
+                if (date_time.date != null) try self.underlying_writer.writeAll(switch (options.date_time_separator) {
+                    .space => " ",
+                    .t => "T",
+                });
                 try self.underlying_writer.writeAll(time);
             }
             if (date_time.date != null and date_time.time != null) {
@@ -262,7 +288,9 @@ test WriteStream {
 
     const writer = dynamic_buffer.writer(std.testing.allocator);
 
-    var write_stream: WriteStream(std.ArrayListUnmanaged(u8).Writer, .{}) = .{
+    var write_stream: WriteStream(std.ArrayListUnmanaged(u8).Writer, .{
+        .unicode_full_escape_strings = true,
+    }) = .{
         .underlying_writer = writer,
         .allocator = std.testing.allocator,
     };
