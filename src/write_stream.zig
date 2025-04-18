@@ -70,17 +70,17 @@ pub fn Stream(WriterT: type, comptime options: Options) type {
             self.stack.deinit(self.allocator);
         }
 
-        pub fn writeStringRaw(self: *WriteStreamT, string: []const u8) !void {
+        pub fn writeStringRaw(self: *WriteStreamT, string: []const u8, multiline: bool) !void {
             if (options.unicode_full_escape_strings) {
                 const utf8_view = try std.unicode.Utf8View.init(string);
                 var codepoints = utf8_view.iterator();
                 while (codepoints.nextCodepoint()) |codepoint| {
                     switch (codepoint) {
                         std.ascii.control_code.bs => try self.underlying_writer.writeAll("\\b"),
-                        '\t' => try self.underlying_writer.writeAll("\\t"),
-                        '\n' => try self.underlying_writer.writeAll("\\n"),
+                        '\t' => try self.underlying_writer.writeAll(if (multiline) "\t" else "\\t"),
+                        '\n' => try self.underlying_writer.writeAll(if (multiline) "\n" else "\\n"),
                         std.ascii.control_code.ff => try self.underlying_writer.writeAll("\\f"),
-                        '\r' => try self.underlying_writer.writeAll("\\r"),
+                        '\r' => try self.underlying_writer.writeAll(if (multiline) "\r" else "\\r"),
                         '"' => try self.underlying_writer.writeAll("\\\""),
                         '\\' => try self.underlying_writer.writeAll("\\"),
                         ' ', '#'...'[', ']'...'~' => try self.underlying_writer.writeByte(@as(u8, @intCast(codepoint))),
@@ -94,10 +94,10 @@ pub fn Stream(WriterT: type, comptime options: Options) type {
             for (string) |char| {
                 try self.underlying_writer.writeAll(switch (char) {
                     std.ascii.control_code.bs => "\\b",
-                    '\t' => "\\t",
-                    '\n' => "\\n",
+                    '\t' => if (multiline) "\t" else "\\t",
+                    '\n' => if (multiline) "\n" else "\\n",
                     std.ascii.control_code.ff => "\\f",
-                    '\r' => "\\r",
+                    '\r' => if (multiline) "\r" else "\\r",
                     '"' => "\\\"",
                     '\\' => "\\",
                     else => &.{char},
@@ -113,7 +113,7 @@ pub fn Stream(WriterT: type, comptime options: Options) type {
             }
 
             try self.underlying_writer.writeAll("\"");
-            try self.writeStringRaw(key_name);
+            try self.writeStringRaw(key_name, false);
             try self.underlying_writer.writeAll("\"");
         }
 
@@ -169,8 +169,17 @@ pub fn Stream(WriterT: type, comptime options: Options) type {
             self.assertCanWriteValue();
             try self.writeDelimeter();
             try self.underlying_writer.writeAll("\"");
-            try self.writeStringRaw(string);
+            try self.writeStringRaw(string, false);
             try self.underlying_writer.writeAll("\"");
+            self.finishValue();
+        }
+
+        pub fn writeMultilineString(self: *WriteStreamT, string: []const u8) !void {
+            self.assertCanWriteValue();
+            try self.writeDelimeter();
+            try self.underlying_writer.writeAll("\"\"\"");
+            try self.writeStringRaw(string, true);
+            try self.underlying_writer.writeAll("\"\"\"");
             self.finishValue();
         }
 

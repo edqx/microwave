@@ -48,6 +48,15 @@ pub fn Stringify(WriteStreamType: type) type {
             self.key_stack.deinit(self.key_allocator);
         }
 
+        fn writeInlineString(self: *StringifyT, string: []const u8) !void {
+            const contains_newline = std.mem.indexOfAny(u8, string, "\r\n") != null;
+            if (contains_newline) {
+                try self.stream.writeMultilineString(string);
+            } else {
+                try self.stream.writeString(string);
+            }
+        }
+
         pub fn writeInlineValue(self: *StringifyT, value: parse.Value) !void {
             switch (value) {
                 .none => unreachable,
@@ -71,7 +80,7 @@ pub fn Stringify(WriteStreamType: type) type {
                     }
                     try self.stream.endArray();
                 },
-                .string => |string_value| try self.stream.writeString(string_value),
+                .string => |string_value| try self.writeInlineString(string_value),
                 .integer => |int_value| try self.stream.writeInteger(int_value),
                 .float => |float_value| try self.stream.writeFloat(float_value),
                 .boolean => |bool_value| try self.stream.writeBoolean(bool_value),
@@ -124,7 +133,7 @@ pub fn Stringify(WriteStreamType: type) type {
             } else if (val_type == parse.Value) {
                 try self.writeInlineValue(val);
             } else if (val_type == []const u8) {
-                try self.stream.writeString(val);
+                try self.writeInlineString(val);
             } else if (val_type == i64) {
                 try self.stream.writeInteger(val);
             } else if (val_type == f64) {

@@ -242,7 +242,7 @@ test Populate {
         \\name = "Lala"
     ;
 
-    const doc = try parse.fromSlice(buf, std.testing.allocator);
+    const doc = try parse.fromSlice(std.testing.allocator, buf);
     defer doc.deinit();
 
     var test_struct: TestDog = undefined;
