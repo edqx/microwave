@@ -132,7 +132,7 @@ a pointer to an existing one to populate using the `into*` functions:
 
 ```zig
 var dog: Dog = undefined;
-try microwave.Populate(Dog).intoFromSliceOwned(allocator, &dog); // or .createFromReader
+try microwave.Populate(Dog).intoFromSliceOwned(allocator, &dog); // or .intoFromReaderOwned
 defer microwave.Populate(Dog).deinitRecursive(allocator, &dog);
 ```
 
