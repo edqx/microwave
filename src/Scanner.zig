@@ -64,7 +64,7 @@ const StringKind = enum {
 
 buffer: []const u8,
 can_request_more: bool = false,
-cursor: usize = 0,
+offset: usize = 0,
 
 fn isCommentChar(b: u8) bool {
     return b == '#';
@@ -230,13 +230,13 @@ fn isNotWhitespaceChar(b: u8) bool {
 
 pub fn reachedEnd(self: *Scanner, offset_required: usize) bool {
     return !self.can_request_more and
-        (self.buffer.len < offset_required or self.cursor == self.buffer.len - offset_required);
+        (self.buffer.len < offset_required or self.offset == self.buffer.len - offset_required);
 }
 
 fn peekMany(self: *Scanner, num_bytes: usize) ![]const u8 {
     std.debug.assert(num_bytes != 0);
-    if (self.buffer.len < num_bytes or self.cursor > self.buffer.len - num_bytes) return Error.UnexpectedEndOfBuffer;
-    return self.buffer[self.cursor .. self.cursor + num_bytes];
+    if (self.buffer.len < num_bytes or self.offset > self.buffer.len - num_bytes) return Error.UnexpectedEndOfBuffer;
+    return self.buffer[self.offset .. self.offset + num_bytes];
 }
 
 fn peekSingle(self: *Scanner) !u8 {
@@ -249,17 +249,17 @@ fn peekAdvance(self: *Scanner, offset: usize) !u8 {
 
 fn consumeNone(self: *Scanner) !Token.Range {
     return .{
-        .start = self.cursor,
-        .end = self.cursor,
+        .start = self.offset,
+        .end = self.offset,
     };
 }
 
 fn consumeAnySingle(self: *Scanner) !Token.Range {
-    if (self.cursor > self.buffer.len - 1) return Error.UnexpectedEndOfBuffer;
-    defer self.cursor += 1;
+    if (self.offset > self.buffer.len - 1) return Error.UnexpectedEndOfBuffer;
+    defer self.offset += 1;
     return .{
-        .start = self.cursor,
-        .end = self.cursor + 1,
+        .start = self.offset,
+        .end = self.offset + 1,
     };
 }
 
@@ -289,10 +289,10 @@ fn consumeSlice(self: *Scanner, slice: []const u8) !?Token.Range {
         if (peek != slice[i]) return null;
     }
 
-    defer self.cursor += slice.len;
+    defer self.offset += slice.len;
     return .{
-        .start = self.cursor,
-        .end = self.cursor + slice.len,
+        .start = self.offset,
+        .end = self.offset + slice.len,
     };
 }
 
@@ -436,8 +436,8 @@ fn consumeNumberLiteralToken(self: *Scanner) !?Token {
 }
 
 pub fn next(self: *Scanner) !?Token {
-    const original_pos = self.cursor;
-    errdefer self.cursor = original_pos;
+    const original_pos = self.offset;
+    errdefer self.offset = original_pos;
 
     if (try self.consumeMany(isSpaceChar)) |range| return range.token(.whitespace);
     if (try self.consumeMany(isWhitespaceChar)) |range| return range.token(.newline);
@@ -449,11 +449,11 @@ pub fn next(self: *Scanner) !?Token {
     if (try self.consumeSingle(isInlineTableOpenChar)) |range| return range.token(.inline_table_start);
     if (try self.consumeSingle(isInlineTableCloseChar)) |range| return range.token(.inline_table_end);
     if (try self.consumeSingle(isDelimeterChar)) |range| return range.token(.delimeter);
-    const restore_pos = self.cursor;
+    const restore_pos = self.offset;
     if (try self.consumeDateTimeLiteralToken()) |date_time_token| {
         return date_time_token;
     } else {
-        self.cursor = restore_pos;
+        self.offset = restore_pos;
     }
     if (try self.consumeNumberLiteralToken()) |number_token| return number_token;
     if (try self.consumeString(.multiple_lines)) |string_range| return string_range.token(.literal_string);
@@ -461,6 +461,10 @@ pub fn next(self: *Scanner) !?Token {
     if (try self.consumeSlice("true") orelse try self.consumeSlice("false")) |range| return range.token(.literal_bool);
     if (try self.consumeMany(isKeyChar)) |range| return range.token(.key);
     return if (self.reachedEnd(0)) null else Error.UnexpectedByte;
+}
+
+pub fn cursor(self: *Scanner) usize {
+    return self.offset;
 }
 
 pub fn tokenContents(self: *Scanner, token: Token) []const u8 {
@@ -622,13 +626,13 @@ pub fn BufferedReaderScanner(comptime buf_size: usize, comptime ReaderType: type
         }
 
         fn moveBufferForward(self: *BufferedReaderScannerT) !void {
-            const request_bytes = self.scanner.cursor;
+            const request_bytes = self.scanner.offset;
             if (request_bytes == 0) return BufferedReaderScannerT.Error.BufferTooSmall;
             self.buffer_global_offset += request_bytes;
             std.mem.copyForwards(u8, self.buffer[0 .. buf_size - request_bytes], self.buffer[request_bytes..]);
             const read_bytes = try self.reader.readAll(self.buffer[buf_size - request_bytes ..]);
             if (read_bytes != request_bytes) self.scanner.can_request_more = false;
-            self.scanner.cursor = 0;
+            self.scanner.offset = 0;
             self.scanner.buffer = &self.buffer;
         }
 
@@ -657,6 +661,10 @@ pub fn BufferedReaderScanner(comptime buf_size: usize, comptime ReaderType: type
             var next_token_in_buffer = try self.nextImpl() orelse return null;
             next_token_in_buffer.range = next_token_in_buffer.range.offset(self.buffer_global_offset);
             return next_token_in_buffer;
+        }
+
+        pub fn cursor(self: *BufferedReaderScannerT) usize {
+            return self.buffer_global_offset + self.scanner.offset;
         }
 
         pub fn tokenContents(self: *BufferedReaderScannerT, token: Token) []const u8 {

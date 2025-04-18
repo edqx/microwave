@@ -199,41 +199,41 @@ pub fn Stringify(WriteStreamType: type) type {
     };
 }
 
-pub fn stringifyTableToStream(temp_allocator: std.mem.Allocator, root_table: parse.Value.Table, stream: anytype) !void {
+pub fn tableToStream(temp_allocator: std.mem.Allocator, root_table: parse.Value.Table, stream: anytype) !void {
     var stringifier: Stringify(@TypeOf(stream)) = .{ .key_allocator = temp_allocator, .stream = stream };
     defer stringifier.deinit();
 
     try stringifier.writeTableKeys(root_table);
 }
 
-pub fn stringifyTable(temp_allocator: std.mem.Allocator, root_table: parse.Value.Table, writer: anytype) !void {
+pub fn writeTable(temp_allocator: std.mem.Allocator, root_table: parse.Value.Table, writer: anytype) !void {
     var stream: write_stream.Stream(@TypeOf(writer), .{}) = .{
         .allocator = temp_allocator,
         .underlying_writer = writer,
     };
     defer stream.deinit();
 
-    try stringifyTableToStream(temp_allocator, root_table, &stream);
+    try tableToStream(temp_allocator, root_table, &stream);
 }
 
-pub fn stringifyToStream(temp_allocator: std.mem.Allocator, val: anytype, stream: anytype) !void {
+pub fn toStream(temp_allocator: std.mem.Allocator, val: anytype, stream: anytype) !void {
     var stringifier: Stringify(@TypeOf(stream)) = .{ .key_allocator = temp_allocator, .stream = stream };
     defer stringifier.deinit();
 
     try stringifier.writeFields(val);
 }
 
-pub fn stringify(temp_allocator: std.mem.Allocator, val: anytype, writer: anytype) !void {
+pub fn write(temp_allocator: std.mem.Allocator, val: anytype, writer: anytype) !void {
     var stream: write_stream.Stream(@TypeOf(writer), .{}) = .{
         .allocator = temp_allocator,
         .underlying_writer = writer,
     };
     defer stream.deinit();
 
-    try stringifyToStream(temp_allocator, val, &stream);
+    try toStream(temp_allocator, val, &stream);
 }
 
-test stringifyTable {
+test writeTable {
     var dynamic_buffer: std.ArrayListUnmanaged(u8) = .empty;
     defer dynamic_buffer.deinit(std.testing.allocator);
 
@@ -256,7 +256,7 @@ test stringifyTable {
     );
     defer parse.deinitTable(std.testing.allocator, &table);
 
-    try stringifyTable(std.testing.allocator, table, dynamic_buffer.writer(std.testing.allocator));
+    try writeTable(std.testing.allocator, table, dynamic_buffer.writer(std.testing.allocator));
 
     try std.testing.expectEqualSlices(u8,
         \\valid_first_names = [ "Barney", "Lala", "Bo", { name = "Jenny", dead = true } ]
@@ -301,7 +301,7 @@ const Dog = struct {
     other_info: parse.Value,
 };
 
-test stringify {
+test write {
     var dynamic_buffer: std.ArrayListUnmanaged(u8) = .empty;
     defer dynamic_buffer.deinit(std.testing.allocator);
 
@@ -324,7 +324,7 @@ test stringify {
         .other_info = .{ .string = "really old" },
     };
 
-    try stringify(std.testing.allocator, val, dynamic_buffer.writer(std.testing.allocator));
+    try write(std.testing.allocator, val, dynamic_buffer.writer(std.testing.allocator));
     try std.testing.expectEqualSlices(u8,
         \\name = "Barney"
         \\breed = "unknown"
