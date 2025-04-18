@@ -1,7 +1,7 @@
 .{
     .name = .microwave,
     .fingerprint = 0x9817a1761939877b,
-    .version = "0.1.0",
+    .version = "1.0.0",
     .dependencies = .{},
     .paths = .{
         "src",
