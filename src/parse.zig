@@ -411,6 +411,8 @@ pub fn Parser(ScannerType: type) type {
 
         pub fn readRootTableValue(self: *ParserT) !Value.Table {
             var root_table: Value = .{ .table = .empty };
+            errdefer deinitTable(self.allocator, root_table.table);
+
             var active_table = &root_table.table;
 
             try self.nextToken();
