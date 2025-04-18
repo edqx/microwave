@@ -151,12 +151,57 @@ try microwave.stringify.writeTable(allocator, root_table, file.writer());
 > [!NOTE]
 > There's no need to de-init anything, the allocator is for temporary allocations.
 
+### Write Stream API
+You can build a TOML file manually, with safety assertions that the file is well-formed,
+using the write stream API:
+
+```zig
+var stream: microwave.write_stream.Stream(@TypeOf(file.writer()), .{
+    .newlines = .lf,
+    unicode_full_escape_strings = false,
+    format_float_options = .{
+        .mode = .scientific,
+        .precision = null,
+    },
+    date_time_separator = .t,
+}) = .{
+    .underlying_writer = file.writer(),
+    .allocator = allocator,
+};
+defer stream.deinit();
+```
+
+You can use the following functions on the `write_stream.Stream` struct to build your TOML file:
+```zig
+pub fn beginDeepKeyPair(self: *Stream, key_parts: []const []const u8) !void;
+pub fn beginKeyPair(self: *Stream, key_name: []const u8) !void;
+
+pub fn writeString(self: *Stream, string: []const u8) !void;
+pub fn writeInteger(self: *Stream, integer: i64) !void;
+pub fn writeFloat(self: *Stream, float: f64) !void;
+pub fn writeBoolean(self: *Stream, boolean: bool) !void;
+pub fn writeDateTime(self: *Stream, date_time: parse.Value.DateTime) !void;
+
+pub fn beginArray(self: *Stream) !void;
+pub fn arrayLine(self: *Stream) !void;
+pub fn endArray(self: *Stream) !void;
+
+pub fn beginInlineTable(self: *Stream) !void;
+pub fn endInlineTable(self: *Stream) !void;
+
+pub fn writeDeepTable(self: *Stream, key_parts: []const []const u8) !void;
+pub fn writeTable(self: *Stream, key_name: []const u8) !void;
+
+pub fn writeDeepManyTable(self: *Stream, key_parts: []const []const u8) !void;
+pub fn writeManyTable(self: *Stream, key_name: []const u8) !void;
+```
+
 ### Scanner API
-As a low level API, Microwave also provides the ability to scan through a document
-and iterate through individual tokens.
+As a low level API, Microwave also provides the ability to scan through a file and
+iterate through individual tokens.
 
 No safety checks or file state is kept at this stage, so it doesn't guarantee a
-well-formed TOML document. Those checks are done in the [parsing stage](#parser-api).
+well-formed TOML file. Those checks are done in the [parsing stage](#parser-api).
 
 #### Whole Slice Scanner
 If you have access to the entire slice of the TOML file, you can initialise
