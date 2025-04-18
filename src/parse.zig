@@ -3,7 +3,7 @@ const std = @import("std");
 const Scanner = @import("Scanner.zig");
 
 pub const Value = union(enum) {
-    pub const Table = std.StringHashMapUnmanaged(Value);
+    pub const Table = std.StringArrayHashMapUnmanaged(Value);
     pub const Array = std.ArrayListUnmanaged(Value);
     pub const ArrayOfTables = std.ArrayListUnmanaged(Table);
 
@@ -95,8 +95,7 @@ pub const Value = union(enum) {
             },
             .array_of_tables => |*array_value| {
                 for (array_value.items) |*table_value| {
-                    var values = table_value.valueIterator();
-                    while (values.next()) |item_ptr| item_ptr.deinitRecursive(allocator);
+                    for (table_value.values()) |*item_ptr| item_ptr.deinitRecursive(allocator);
                     table_value.deinit(allocator);
                 }
                 array_value.deinit(allocator);
@@ -109,8 +108,7 @@ pub const Value = union(enum) {
 };
 
 pub fn deinitTable(allocator: std.mem.Allocator, table_value: *Value.Table) void {
-    var values = table_value.valueIterator();
-    while (values.next()) |item_ptr| item_ptr.deinitRecursive(allocator);
+    for (table_value.values()) |*item_ptr| item_ptr.deinitRecursive(allocator);
     table_value.deinit(allocator);
 }
 
@@ -293,7 +291,7 @@ pub fn Parser(ScannerType: type) type {
                     if (!expecting_key) return Error.UnexpectedToken;
                     const key_contents = self.scanner.tokenContents(last_key_token);
                     const nested_table_value = try parent_table.getOrPut(self.allocator, key_contents);
-                    errdefer _ = parent_table.remove(key_contents);
+                    errdefer _ = parent_table.orderedRemove(key_contents);
                     if (nested_table_value.found_existing) {
                         switch (mode) {
                             .inline_table => {
@@ -411,7 +409,7 @@ pub fn Parser(ScannerType: type) type {
 
         pub fn readRootTableValue(self: *ParserT) !Value.Table {
             var root_table: Value = .{ .table = .empty };
-            errdefer deinitTable(self.allocator, root_table.table);
+            errdefer deinitTable(self.allocator, &root_table.table);
 
             var active_table = &root_table.table;
 

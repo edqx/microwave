@@ -44,7 +44,7 @@ pub const NestingKind = union(enum) {
     inline_table: Container,
 };
 
-pub fn WriteStream(WriterT: type, comptime options: Options) type {
+pub fn Stream(WriterT: type, comptime options: Options) type {
     return struct {
         const WriteStreamT = @This();
 
@@ -282,13 +282,13 @@ pub fn WriteStream(WriterT: type, comptime options: Options) type {
     };
 }
 
-test WriteStream {
+test Stream {
     var dynamic_buffer: std.ArrayListUnmanaged(u8) = .empty;
     defer dynamic_buffer.deinit(std.testing.allocator);
 
     const writer = dynamic_buffer.writer(std.testing.allocator);
 
-    var write_stream: WriteStream(std.ArrayListUnmanaged(u8).Writer, .{
+    var write_stream: Stream(std.ArrayListUnmanaged(u8).Writer, .{
         .unicode_full_escape_strings = true,
     }) = .{
         .underlying_writer = writer,
