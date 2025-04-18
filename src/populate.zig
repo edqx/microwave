@@ -41,12 +41,18 @@ pub fn Populate(Container: type) type {
             }
             if (type_info == .@"union") {
                 inline for (type_info.@"union".fields) |field| {
-                    var dest = @unionInit(Container, field.name, undefined);
-                    Populate(@FieldType(Container, field.name)).intoFromValueOwned(allocator, &dest, value) catch |e| switch (e) {
-                        Error.IncorrectType, Error.MissingKey => continue,
+                    var field_dest: @FieldType(Container, field.name) = undefined;
+                    var success = true;
+                    Populate(@FieldType(Container, field.name)).intoFromValueOwned(allocator, &field_dest, value) catch |e| switch (e) {
+                        Error.IncorrectType, Error.MissingKey => {
+                            success = false;
+                        },
                         else => return e,
                     };
-                    return;
+                    if (success) {
+                        destination.* = @unionInit(Container, field.name, field_dest);
+                        return;
+                    }
                 }
                 return Error.IncorrectType;
             }
@@ -124,7 +130,6 @@ pub fn Populate(Container: type) type {
         }
 
         pub fn intoFromTableOwned(allocator: std.mem.Allocator, destination: *Container, table: parse.Value.Table) !void {
-            if (type_info != .@"struct") @compileError("Tables can only be populated into struct type destination variables");
             try intoFromValueOwned(allocator, destination, .{ .table = table });
         }
 
@@ -254,4 +259,37 @@ test Populate {
     try std.testing.expectEqual(16, test_struct.age);
     try std.testing.expectEqualSlices(u8, "Bo", test_struct.friends[0].name);
     try std.testing.expectEqualSlices(u8, "Lala", test_struct.friends[1].name);
+}
+
+const Animal = union(enum) {
+    dog: struct {
+        name: []const u8,
+        breed: []const u8,
+    },
+    cat: struct {
+        name: []const u8,
+        number_of_colours: i64,
+    },
+};
+
+test "Populate with union for disjunction types" {
+    const animal1 = try Populate(Animal).createFromSlice(std.testing.allocator,
+        \\name = "Barney"
+        \\breed = "unknown"
+    );
+    defer animal1.deinit();
+
+    try std.testing.expect(animal1.value == .dog);
+    try std.testing.expectEqualSlices(u8, "Barney", animal1.value.dog.name);
+    try std.testing.expectEqualSlices(u8, "unknown", animal1.value.dog.breed);
+
+    const animal2 = try Populate(Animal).createFromSlice(std.testing.allocator,
+        \\name = "Whitepaws"
+        \\number_of_colours = 2
+    );
+    defer animal2.deinit();
+
+    try std.testing.expect(animal2.value == .cat);
+    try std.testing.expectEqualSlices(u8, "Whitepaws", animal2.value.cat.name);
+    try std.testing.expectEqual(2, animal2.value.cat.number_of_colours);
 }

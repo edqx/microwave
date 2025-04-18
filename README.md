@@ -111,6 +111,56 @@ const dog = try microwave.Populate(Dog).createFromSlice(allocator, toml_text); /
 defer dog.deinit();
 ```
 
+#### Struct Shape
+Since TOML only supports a subset of the types that are available in Zig, your destination
+struct must consist of the following types:
+
+| TOML Type | Zig Type | Examples |
+|-|-|-|
+| String | `[]const u8` | `"Barney"` |
+| Float | `f64` | `5.0e+2` |
+| Integer | `i64`, `f64` | `16` |
+| Boolean | `bool` | `true`, `false` |
+| Date/Time | `parse.Value.DateTime` | `2025-04-19T00:43:00.500+05:00` |
+| Specific Table | `struct { ... }` | `{ name = "Barney", age = 16 }` |
+| Array of Tables | `[]struct {}` | `[[pet]]` |
+| Inline Array | `[]T` | `["Hello", "Bonjour", "Hola"]` |
+| Any Table | `parse.Value.Table` | Any TOML table |
+| Any Value | `parse.Value` | Any TOML value |
+
+You can also specify an option of different types using unions. For example:
+
+```zig
+const Animal = union(enum) {
+    dog: struct {
+        name: []const u8,
+        breed: []const u8,
+    },
+    cat: struct {
+        name: []const u8,
+        number_of_colours: usize,
+    },
+};
+
+const animal = try microwave.Populate(Animal).createFromSlice(allocator, toml_text);
+defer animal.deinit();
+```
+
+If the field is entirely optional and may not exist, use the Zig optional indiciator
+on the type, for example:
+
+```zig
+const Person = struct {
+    name: []const u8,
+    age: i64,
+    salary: f64,
+    job: ?[]const u8, // can be missing from the TOML file
+};
+
+const person = try microwave.Populate(Person).createFromSlice(allocator, toml_text);
+defer person.deinit();
+```
+
 #### Owned Allocations API
 Like the parser API, you might want to own the pointers yourself rather than delegate
 them to an arena. You can use the `*Owned` variations of the functions.
