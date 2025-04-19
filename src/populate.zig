@@ -111,8 +111,11 @@ pub fn Populate(Container: type) type {
                     destination.* = try allocator.dupe(u8, string_value);
                 },
                 .integer => |integer_value| {
-                    if (Container != i64) return Error.IncorrectType;
-                    destination.* = integer_value;
+                    if (Container == i64) {
+                        destination.* = integer_value;
+                    } else if (Container == f64) {
+                        destination.* = @floatFromInt(integer_value);
+                    } else return Error.IncorrectType;
                 },
                 .float => |float_value| {
                     if (Container != f64) return Error.IncorrectType;
