@@ -358,7 +358,7 @@ Not sure.
 ## Spec Compliancy
 See the [tests](https://github.com/edqx/microwave/tree/master/tests) folder to check
 Microwave against the various official TOML test cases. Most are false positives
-relating to stirngs and encoding.
+relating to strings and encoding.
 
 ```
 - fail: invalid/control/bare-cr.toml
