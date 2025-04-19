@@ -62,7 +62,7 @@ pub const Token = struct {
 };
 
 pub const State = enum {
-    key,
+    root,
     table_key,
     inline_key,
     value,
@@ -76,7 +76,7 @@ const StringKind = enum {
 
 buffer: []const u8,
 can_request_more: bool = false,
-state: State = .key,
+state: State = .root,
 offset: usize = 0,
 
 fn isCommentChar(b: u8) bool {
@@ -498,12 +498,12 @@ pub fn next(self: *Scanner) !?Token {
     if (try self.consumeCommentLine()) |range| return range.token(.comment);
 
     switch (self.state) {
-        inline .key, .table_key, .inline_key => |inner_state| {
+        inline .root, .table_key, .inline_key => |inner_state| {
             if (try self.consumeSingle(isAccessChar)) |range| return range.token(.access);
             if (try self.consumeString(.single_line)) |string_range| return string_range.token(.key);
             if (try self.consumeMany(isKeyChar)) |range| return range.token(.key);
             switch (inner_state) {
-                .key => {
+                .root => {
                     if (try self.consumeSingle(isEqualsChar)) |range| return range.token(.equals);
                     if (try self.consumeSingle(isTableOpenChar)) |first_range| {
                         if (try self.consumeSingle(isTableOpenChar)) |second_range| {
@@ -594,14 +594,14 @@ fn expectToken(token: ?Token, kind: Token.Kind) !void {
 }
 
 fn testAnyScanner(scanner: anytype) !void {
-    scanner.setState(.key);
+    scanner.setState(.root);
     try expectToken(try scanner.next(), .comment);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
     scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
-    scanner.setState(.key);
+    scanner.setState(.root);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
@@ -618,20 +618,20 @@ fn testAnyScanner(scanner: anytype) !void {
     try expectToken(try scanner.next(), .literal_string);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .array_end);
-    scanner.setState(.key);
+    scanner.setState(.root);
 
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
     scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
-    scanner.setState(.key);
+    scanner.setState(.root);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
     scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
-    scanner.setState(.key);
+    scanner.setState(.root);
     try expectToken(try scanner.next(), .whitespace);
     try expectToken(try scanner.next(), .comment);
     try expectToken(try scanner.next(), .newline);
@@ -639,45 +639,45 @@ fn testAnyScanner(scanner: anytype) !void {
     try expectToken(try scanner.next(), .equals);
     scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
-    scanner.setState(.key);
+    scanner.setState(.root);
 
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .many_table_start);
     scanner.setState(.table_key);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .many_table_end);
-    scanner.setState(.key);
+    scanner.setState(.root);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
     scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
-    scanner.setState(.key);
+    scanner.setState(.root);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
     scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
-    scanner.setState(.key);
+    scanner.setState(.root);
 
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .many_table_start);
     scanner.setState(.table_key);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .many_table_end);
-    scanner.setState(.key);
+    scanner.setState(.root);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
     scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
-    scanner.setState(.key);
+    scanner.setState(.root);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
     scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
-    scanner.setState(.key);
+    scanner.setState(.root);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
@@ -686,26 +686,26 @@ fn testAnyScanner(scanner: anytype) !void {
     scanner.setState(.array_container);
     try expectToken(try scanner.next(), .literal_string);
     try expectToken(try scanner.next(), .array_end);
-    scanner.setState(.key);
+    scanner.setState(.root);
 
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .many_table_start);
     scanner.setState(.table_key);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .many_table_end);
-    scanner.setState(.key);
+    scanner.setState(.root);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
     scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
-    scanner.setState(.key);
+    scanner.setState(.root);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
     scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
-    scanner.setState(.key);
+    scanner.setState(.root);
 }
 
 test Scanner {

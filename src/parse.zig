@@ -457,7 +457,7 @@ pub fn Parser(ScannerType: type) type {
             var active_table = &root_table.table;
 
             forever: while (true) {
-                self.scanner.setState(.key);
+                self.scanner.setState(.root);
                 try self.nextToken();
 
                 if (self.isEof()) break;

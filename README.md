@@ -250,8 +250,9 @@ pub fn writeManyTable(self: *Stream, key_name: []const u8) !void;
 As a low level API, Microwave also provides the ability to scan through a file and
 iterate through individual tokens.
 
-No safety checks or file state is kept at this stage, so it doesn't guarantee a
-well-formed TOML file. Those checks are done in the [parsing stage](#parser-api).
+Only basic state checks are done at this stage, and that state you have to manage
+yourself. It doesn't guarantee a well-formed TOML file. Most of those checks are
+done in the [parsing stage](#parser-api).
 
 #### Whole Slice Scanner
 If you have access to the entire slice of the TOML file, you can initialise
@@ -261,6 +262,8 @@ var scanner: microwave.Scanner = .{ .buffer = slice };
 
 while (try scanner.next()) |token| {
     // token.kind, token.range.start, token.range.end
+
+    // modify state with scanner.setState(state)
 }
 ```
 
@@ -269,7 +272,7 @@ The default scanner may return any of the following errors:
 pub const Error = error{ UnexpectedEndOfBuffer, UnexpectedByte };
 ```
 
-### Buffered Reader Scanner
+#### Buffered Reader Scanner
 You can also tokenise the TOML file using a reader:
 ```zig
 var scanner = microwave.Scanner.bufferedReaderScanner(file.reader());
@@ -281,6 +284,33 @@ The buffered reader scanner may return any of the following errors:
 ```zig
 pub const Error = error{ UnexpectedEndOfBuffer, UnexpectedByte, BufferTooSmall };
 ```
+
+#### Managing State
+A TOML file can be tokenised differently depending on what kind of entities need
+to be read. The scanner API doesn't manage this for you, but with your own reading
+logic you can update the state of the scanner using the `scanner.setState` function:
+
+```zig
+while (try scanner.next()) |token| {
+    if (token.kind == .table_start) {
+        scanner.setState(.table_key);
+    }
+    if (token.kind == .table_end) {
+        scanner.setState(.root);
+    }
+}
+```
+
+The valid states are listed below:
+| State Name | Enum Value | Description |
+|-|-|-|
+| Root | `.root` | Either ordinary newline-separated keys, or \[table] and [[many table]] structures |
+| Table Key | `.table_key` | The keys inside \[ .. ] and [[ ... ]] |
+| Inline Key | `.inline_key` | Delimeter-separated inline table keys |
+| Value | `.value` | An ordinary value literal, array or inline table opening token |
+| Array Container | `.array_container` | Same as `.value`, but can process array close tokens and value delimeters |
+
+The default state is `.root`.
 
 #### Handling Errors
 
