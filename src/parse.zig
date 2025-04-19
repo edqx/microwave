@@ -116,7 +116,11 @@ pub fn Parser(ScannerType: type) type {
     return struct {
         const ParserT = @This();
 
-        pub const Error = std.mem.Allocator.Error || std.fmt.ParseIntError || std.fmt.ParseFloatError || ScannerType.Error || error{ UnexpectedToken, UnexpectedEof, UnexpectedEol, InvalidKeyAccess, DuplicateKey };
+        pub const Error = std.mem.Allocator.Error ||
+            std.fmt.ParseIntError ||
+            std.fmt.ParseFloatError ||
+            ScannerType.Error ||
+            error{ UnexpectedToken, UnexpectedEof, UnexpectedEol, InvalidKeyAccess, DuplicateKey, LeadingZero };
 
         allocator: std.mem.Allocator,
         scanner: *ScannerType,

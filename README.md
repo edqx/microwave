@@ -2,7 +2,7 @@
 
 A TOML parser for [Zig](https://ziglang.org).
 
-This parser should be spec compliant. (WIP: 417/557 of https://github.com/toml-lang/toml-test/)
+This parser should be spec compliant. (WIP, see [Spec Compliancy](#spec-compliancy))
 
 ## Features
 - [x] Parse all spec-compliant TOML documents. (WIP)
@@ -11,6 +11,15 @@ This parser should be spec compliant. (WIP: 417/557 of https://github.com/toml-l
 - [x] Populate dynamic values
 - [x] TOML builder/write stream
 - [x] Stringify entire structs and tables
+
+### TODO
+These features are yet to be implemented, and are actively being worked on, in order
+of severity:
+- Parsing string escape codes (\n, \r, \u0000, .etc, see https://toml.io/en/v1.0.0#string)
+- Properly parsing date time (primitive implementation exists to split the date literal, see https://toml.io/en/v1.0.0#offset-date-time)
+- Some minor parsing issues, for example sometimes keys are allowed after table declarations, when a newline should be required
+- Invalid dates aren't checked (possibly won't be implemented)
+- Not all literals are checked against the spec (leading zeroes are currently allowed)
 
 ## Usage
 
@@ -345,6 +354,155 @@ Check out my other project, [dishwasher](https://github.com/edqx/dishwasher) for
 
 ## Why 'Microwave'?
 Not sure.
+
+## Spec Compliancy
+See the [tests](https://github.com/edqx/microwave/tree/master/tests) folder to check
+Microwave against the various official TOML test cases. Most are false positives
+relating to stirngs and encoding.
+
+```
+- fail: invalid/control/bare-cr.toml
+- fail: invalid/control/comment-cr.toml
+- fail: invalid/control/comment-del.toml
+- fail: invalid/control/comment-ff.toml
+- fail: invalid/control/comment-lf.toml
+- fail: invalid/control/comment-null.toml
+- fail: invalid/control/comment-us.toml
+- fail: invalid/control/multi-cr.toml
+- fail: invalid/control/multi-del.toml
+- fail: invalid/control/multi-lf.toml
+- fail: invalid/control/multi-null.toml
+- fail: invalid/control/multi-us.toml
+- fail: invalid/control/rawmulti-cr.toml
+- fail: invalid/control/rawmulti-del.toml
+- fail: invalid/control/rawmulti-lf.toml
+- fail: invalid/control/rawmulti-null.toml
+- fail: invalid/control/rawmulti-us.toml
+- fail: invalid/control/rawstring-del.toml
+- fail: invalid/control/rawstring-lf.toml
+- fail: invalid/control/rawstring-null.toml
+- fail: invalid/control/rawstring-us.toml
+- fail: invalid/control/string-bs.toml
+- fail: invalid/control/string-del.toml
+- fail: invalid/control/string-lf.toml
+- fail: invalid/control/string-null.toml
+- fail: invalid/control/string-us.toml
+- fail: invalid/datetime/feb-29.toml
+- fail: invalid/datetime/feb-30.toml
+- fail: invalid/datetime/hour-over.toml
+- fail: invalid/datetime/mday-over.toml
+- fail: invalid/datetime/mday-under.toml
+- fail: invalid/datetime/minute-over.toml
+- fail: invalid/datetime/month-over.toml
+- fail: invalid/datetime/month-under.toml
+- fail: invalid/datetime/no-leads.toml
+- fail: invalid/datetime/no-leads-month.toml
+- fail: invalid/datetime/no-leads-with-milli.toml
+- fail: invalid/datetime/offset-overflow-hour.toml
+- fail: invalid/datetime/offset-overflow-minute.toml
+- fail: invalid/datetime/second-over.toml
+- fail: invalid/datetime/time-no-leads.toml
+- fail: invalid/datetime/y10k.toml
+- fail: invalid/encoding/bad-codepoint.toml
+- fail: invalid/encoding/bad-utf8-in-comment.toml
+- fail: invalid/encoding/bad-utf8-in-multiline.toml
+- fail: invalid/encoding/bad-utf8-in-multiline-literal.toml
+- fail: invalid/encoding/bad-utf8-in-string.toml
+- fail: invalid/encoding/bad-utf8-in-string-literal.toml
+- fail: invalid/float/leading-zero.toml
+- fail: invalid/float/leading-zero-neg.toml
+- fail: invalid/float/leading-zero-plus.toml
+- fail: invalid/inline-table/duplicate-key-3.toml
+- fail: invalid/inline-table/overwrite-02.toml
+- fail: invalid/inline-table/overwrite-05.toml
+- fail: invalid/inline-table/overwrite-08.toml
+- fail: invalid/integer/leading-zero-1.toml
+- fail: invalid/integer/leading-zero-2.toml
+- fail: invalid/integer/leading-zero-3.toml
+- fail: invalid/integer/leading-zero-sign-1.toml
+- fail: invalid/integer/leading-zero-sign-2.toml
+- fail: invalid/integer/leading-zero-sign-3.toml
+- fail: invalid/key/after-array.toml
+- fail: invalid/key/after-table.toml
+- fail: invalid/key/after-value.toml
+- fail: invalid/key/no-eol.toml
+- fail: invalid/local-date/feb-29.toml
+- fail: invalid/local-date/feb-30.toml
+- fail: invalid/local-date/mday-over.toml
+- fail: invalid/local-date/mday-under.toml
+- fail: invalid/local-date/month-over.toml
+- fail: invalid/local-date/month-under.toml
+- fail: invalid/local-date/no-leads.toml
+- fail: invalid/local-date/no-leads-with-milli.toml
+- fail: invalid/local-date/y10k.toml
+- fail: invalid/local-datetime/feb-29.toml
+- fail: invalid/local-datetime/feb-30.toml
+- fail: invalid/local-datetime/hour-over.toml
+- fail: invalid/local-datetime/mday-over.toml
+- fail: invalid/local-datetime/mday-under.toml
+- fail: invalid/local-datetime/minute-over.toml
+- fail: invalid/local-datetime/month-over.toml
+- fail: invalid/local-datetime/month-under.toml
+- fail: invalid/local-datetime/no-leads.toml
+- fail: invalid/local-datetime/no-leads-with-milli.toml
+- fail: invalid/local-datetime/second-over.toml
+- fail: invalid/local-datetime/time-no-leads.toml
+- fail: invalid/local-datetime/y10k.toml
+- fail: invalid/local-time/hour-over.toml
+- fail: invalid/local-time/minute-over.toml
+- fail: invalid/local-time/second-over.toml
+- fail: invalid/local-time/time-no-leads.toml
+- fail: invalid/local-time/time-no-leads-2.toml
+- fail: invalid/spec/inline-table-2-0.toml
+- fail: invalid/spec/table-9-0.toml
+- fail: invalid/spec/table-9-1.toml
+- fail: invalid/string/bad-byte-escape.toml
+- fail: invalid/string/bad-escape-1.toml
+- fail: invalid/string/bad-escape-2.toml
+- fail: invalid/string/bad-hex-esc-1.toml
+- fail: invalid/string/bad-hex-esc-2.toml
+- fail: invalid/string/bad-hex-esc-3.toml
+- fail: invalid/string/bad-hex-esc-4.toml
+- fail: invalid/string/bad-hex-esc-5.toml
+- fail: invalid/string/bad-slash-escape.toml
+- fail: invalid/string/bad-uni-esc-1.toml
+- fail: invalid/string/bad-uni-esc-2.toml
+- fail: invalid/string/bad-uni-esc-3.toml
+- fail: invalid/string/bad-uni-esc-4.toml
+- fail: invalid/string/bad-uni-esc-5.toml
+- fail: invalid/string/bad-uni-esc-6.toml
+- fail: invalid/string/bad-uni-esc-7.toml
+- fail: invalid/string/basic-multiline-out-of-range-unicode-escape-1.toml
+- fail: invalid/string/basic-multiline-out-of-range-unicode-escape-2.toml
+- fail: invalid/string/basic-multiline-unknown-escape.toml
+- fail: invalid/string/basic-out-of-range-unicode-escape-1.toml
+- fail: invalid/string/basic-out-of-range-unicode-escape-2.toml
+- fail: invalid/string/basic-unknown-escape.toml
+- fail: invalid/string/multiline-bad-escape-1.toml
+- fail: invalid/string/multiline-bad-escape-2.toml
+- fail: invalid/string/multiline-bad-escape-3.toml
+- fail: invalid/string/multiline-escape-space-1.toml
+- fail: invalid/string/multiline-escape-space-2.toml
+- fail: invalid/table/append-with-dotted-keys-2.toml
+- fail: invalid/table/duplicate.toml
+- fail: invalid/table/duplicate-key-dotted-table.toml
+- fail: invalid/table/duplicate-key-dotted-table2.toml
+- fail: invalid/table/redefine-2.toml
+- fail: invalid/table/redefine-3.toml
+- fail: invalid/table/super-twice.toml
+- fail: valid/comment/everywhere.toml
+- fail: valid/comment/noeol.toml
+- fail: valid/inline-table/newline.toml
+- fail: valid/key/quoted-unicode.toml
+- fail: valid/spec/string-4.toml
+- fail: valid/spec/string-5.toml
+- fail: valid/spec/string-7.toml
+- fail: valid/string/escape-tricky.toml
+- fail: valid/string/multiline-quotes.toml
+- fail: valid/string/raw-multiline.toml
+- fail: valid/string/start-mb.toml
+417/557
+```
 
 ## License
 All microwave code is under the MIT license.
