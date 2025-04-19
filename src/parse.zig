@@ -133,16 +133,16 @@ pub fn Parser(ScannerType: type) type {
 
         pub fn consumeWhitespace(self: *ParserT) !void {
             while (self.current_token) |token| {
-                if (token.kind == .whitespace) {
-                    try self.nextToken();
-                    continue;
-                }
-                return;
+                if (token.kind != .whitespace) return;
+                try self.nextToken();
             }
         }
 
         pub fn consumeToken(self: *ParserT, token_kind: Scanner.Token.Kind) !?Scanner.Token {
             try self.consumeWhitespace();
+            if (token_kind == .newline) {
+                _ = try self.consumeToken(.comment);
+            }
             const next_token = self.current_token orelse return null;
             if (next_token.kind != token_kind) return null;
             try self.nextToken();
@@ -342,9 +342,10 @@ pub fn Parser(ScannerType: type) type {
             var i: usize = 0;
             while (true) : (i += 1) {
                 _ = try self.consumeToken(.newline);
-                if (try self.consumeToken(.array_end_or_table_end) != null) break;
-                if (i > 0) try self.expectToken(.delimeter);
+                const has_delimeter = if (i > 0) try self.consumeToken(.delimeter) != null else false;
                 _ = try self.consumeToken(.newline);
+                if (try self.consumeToken(.array_end_or_table_end) != null) break;
+                if (i != 0 and !has_delimeter) return Error.UnexpectedToken;
                 try array_value.array.append(self.allocator, try self.readValue());
             }
 
@@ -374,6 +375,7 @@ pub fn Parser(ScannerType: type) type {
 
         pub fn readValue(self: *ParserT) Error!Value {
             try self.consumeWhitespace();
+            if (self.current_token == null) return Error.UnexpectedEof;
             const token_contents = self.scanner.tokenContents(self.current_token.?);
             const value = switch (self.current_token.?.kind) {
                 .whitespace,
@@ -389,8 +391,7 @@ pub fn Parser(ScannerType: type) type {
                 .inline_table_start,
                 .inline_table_end,
                 => return try self.consumeInlineTableValue() orelse
-                    try self.consumeArrayValue() orelse
-                    return Error.UnexpectedToken,
+                    try self.consumeArrayValue() orelse return Error.UnexpectedToken,
                 .literal_string => try self.parseStringValueAlloc(token_contents),
                 .literal_base_integer => try self.parseBaseIntegerValue(token_contents),
                 .literal_integer => try self.parseIntegerValue(token_contents),
@@ -602,4 +603,22 @@ test Parser {
     try testKey(root_table, .{ "other_dog", 1, "colours", "head" }, .string, "black");
     try testKey(root_table, .{ "other_dog", 1, "colours", "body" }, .string, "black");
     try testKey(root_table, .{ "other_dog", 1, "colours", "tail" }, .string, "black");
+}
+
+test "parse test" {
+    const res = try fromSlice(std.testing.allocator,
+        \\ints = [1, 2, 3, ]
+        \\floats = [1.1, 2.1, 3.1]
+        \\strings = ["a", "b", "c"]
+        \\dates = [
+        \\  1987-07-05T17:45:00Z,
+        \\  1979-05-27T07:32:00Z,
+        \\  2006-06-01T11:00:00Z,
+        \\]
+        \\comments = [
+        \\         1,
+        \\         2, #this is ok
+        \\]
+    );
+    defer res.deinit();
 }
