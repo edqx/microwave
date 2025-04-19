@@ -1,0 +1,19 @@
+.{
+    .name = .microwave_tests,
+    .fingerprint = 0x36aace56c5ce36a7,
+    .version = "1.0.0",
+    .dependencies = .{
+        .toml_test = .{
+            .url = "git+https://github.com/toml-lang/toml-test#4b12a015c3414435d140c6be38d239dd9708f944",
+            .hash = "N-V-__8AAMvAAwAL4HgmeePKwwvQ0HW7Zi_BDoRBE8VkShAq",
+        },
+        .microwave = .{
+            .path = "..",
+        },
+    },
+    .paths = .{
+        "src",
+        "build.zig",
+        "build.zig.zon",
+    },
+}
