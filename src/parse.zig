@@ -125,7 +125,6 @@ pub fn Parser(ScannerType: type) type {
 
         pub fn nextToken(self: *ParserT) !void {
             self.current_token = try self.scanner.next();
-            std.debug.print("token: {?}\n", .{self.current_token});
         }
 
         fn assertCurrentToken(self: *ParserT, token_kind: Scanner.Token.Kind) void {
@@ -372,8 +371,11 @@ pub fn Parser(ScannerType: type) type {
 
             var i: usize = 0;
             while (true) : (i += 1) {
+                _ = try self.consumeToken(.newline);
+                const has_delimeter = if (i > 0) try self.consumeToken(.delimeter) != null else false;
+                _ = try self.consumeToken(.newline);
                 if (try self.consumeToken(.inline_table_end) != null) break;
-                if (i > 0) try self.expectToken(.delimeter);
+                if (i != 0 and !has_delimeter) return Error.UnexpectedToken;
                 const table_entry = try self.consumeTableAccessGetValuePtr(&table_value.table, .inline_table) orelse
                     return Error.UnexpectedToken;
                 if (table_entry.* != .none) return Error.DuplicateKey;
@@ -431,7 +433,6 @@ pub fn Parser(ScannerType: type) type {
             while (true) {
                 if (try self.consumeToken(.newline) != null) continue;
                 if (self.isEof()) break;
-                std.debug.print("{} {s}\n", .{ self.current_token.?.kind, self.scanner.tokenContents(self.current_token.?) });
                 if (try self.consumeToken(.array_start_or_table_start) != null) {
                     const is_many_table = try self.consumeToken(.array_start_or_table_start) != null;
 
@@ -616,13 +617,13 @@ test Parser {
 
 test "parse test" {
     const res = try fromSlice(std.testing.allocator,
-        \\2000-datetime       = 2000-02-29 15:15:15Z
-        \\2000-datetime-local = 2000-02-29 15:15:15
-        \\2000-date           = 2000-02-29
+        \\str4 = """Here are two quotation marks: "". Simple enough."""
+        \\# str5 = """Here are three quotation marks: """."""  # INVALID
+        \\str5 = """Here are three quotation marks: ""\"."""
+        \\str6 = """Here are fifteen quotation marks: ""\"""\"""\"""\"""\"."""
         \\
-        \\2024-datetime       = 2024-02-29 15:15:15Z
-        \\2024-datetime-local = 2024-02-29 15:15:15
-        \\2024-date           = 2024-02-29
+        \\# "This," she said, "is just a pointless statement."
+        \\str7 = """"This," she said, "is just a pointless statement.""""
     );
     defer res.deinit();
 }

@@ -154,7 +154,10 @@ fn isFractionalSeparator(b: u8) bool {
 }
 
 fn isExponentialSeparator(b: u8) bool {
-    return b == 'e';
+    return switch (b) {
+        'e', 'E' => true,
+        else => false,
+    };
 }
 
 fn isStringChar(b: u8) bool {
@@ -343,8 +346,13 @@ fn consumeDigitGroups(self: *Scanner, digit_predicate: fn (b: u8) bool) !?Token.
 }
 
 fn consumeUnsignedIntegerBaseNumber(self: *Scanner) !?Token.Range {
+    const original_pos = self.offset;
+
     if (try self.consumeSingle(isBaseSignifierPrefix) == null) return null;
-    const base_range = try self.consumeSingle(isUnsignedIntegerBase) orelse return null;
+    const base_range = try self.consumeSingle(isUnsignedIntegerBase) orelse {
+        self.offset = original_pos;
+        return null;
+    };
     const base = self.buffer[base_range.start];
     const digits_range = switch (base) {
         'x' => try self.consumeDigitGroups(isBase16Digit),
@@ -356,8 +364,13 @@ fn consumeUnsignedIntegerBaseNumber(self: *Scanner) !?Token.Range {
 }
 
 fn consumeDate(self: *Scanner) !?Token.Range {
+    const original_pos = self.offset;
+
     const year_range = try self.consumeMany(isBase10Digit) orelse return null;
-    if (try self.consumeSingle(isDateSeparator) == null) return null;
+    if (try self.consumeSingle(isDateSeparator) == null) {
+        self.offset = original_pos;
+        return null;
+    }
     const month_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
     if (try self.consumeSingle(isDateSeparator) == null) return Error.UnexpectedByte;
     const day_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
@@ -366,16 +379,20 @@ fn consumeDate(self: *Scanner) !?Token.Range {
 }
 
 fn consumeTime(self: *Scanner) !?Token.Range {
+    const original_pos = self.offset;
+
     const hour_range = try self.consumeMany(isBase10Digit) orelse return null;
-    if (try self.consumeSingle(isTimeSeparator) == null) return null;
+    if (try self.consumeSingle(isTimeSeparator) == null) {
+        self.offset = original_pos;
+        return null;
+    }
     const minute_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
-    if (try self.consumeSingle(isTimeSeparator) == null) return Error.UnexpectedByte;
+    if (try self.consumeSingle(isTimeSeparator) == null) return hour_range.expand(minute_range);
     const second_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
     if (try self.consumeSingle(isFractionalSeparator)) |_| {
         const millisecond_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
         return hour_range.expand(millisecond_range);
     }
-    _ = minute_range;
     return hour_range.expand(second_range);
 }
 
@@ -426,16 +443,16 @@ fn consumeNumberLiteralToken(self: *Scanner) !?Token {
     const integer_part_range = if (sign_range) |range| range.expand(digits_range) else digits_range;
 
     if (try self.consumeSingle(isFractionalSeparator) != null) {
-        const fraction_digits = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
+        const fraction_digits = try self.consumeDigitGroups(isBase10Digit) orelse return Error.UnexpectedByte;
         if (try self.consumeSingle(isExponentialSeparator) != null) {
             _ = try self.consumeSingle(isNumberSign);
-            const exponential_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
+            const exponential_range = try self.consumeDigitGroups(isBase10Digit) orelse return Error.UnexpectedByte;
             return integer_part_range.expand(exponential_range).token(.literal_float);
         }
         return integer_part_range.expand(fraction_digits).token(.literal_float);
     } else if (try self.consumeSingle(isExponentialSeparator) != null) {
         _ = try self.consumeSingle(isNumberSign);
-        const exponential_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
+        const exponential_range = try self.consumeDigitGroups(isBase10Digit) orelse return Error.UnexpectedByte;
         return integer_part_range.expand(exponential_range).token(.literal_float);
     }
     return integer_part_range.token(.literal_integer);
