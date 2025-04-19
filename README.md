@@ -2,7 +2,7 @@
 
 A TOML parser for [Zig](https://ziglang.org).
 
-This parser should be spec compliant. (WIP: 410/557 of https://github.com/toml-lang/toml-test/)
+This parser should be spec compliant. (WIP: 417/557 of https://github.com/toml-lang/toml-test/)
 
 ## Features
 - [x] Parse all spec-compliant TOML documents. (WIP)
