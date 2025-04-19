@@ -5,7 +5,7 @@ A TOML parser for [Zig](https://ziglang.org).
 This parser should be spec compliant. (WIP: 410/557 of https://github.com/toml-lang/toml-test/)
 
 ## Features
-- [x] Parse all spec-compliant TOML documents
+- [x] Parse all spec-compliant TOML documents. (WIP)
 - [x] Use Zig readers and writers
 - [x] Populate structs
 - [x] Populate dynamic values
