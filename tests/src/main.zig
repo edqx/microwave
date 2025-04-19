@@ -62,5 +62,5 @@ pub fn main() !void {
     for (failed_tests.items) |failed_test_path| {
         try stdout_writer.print("- fail: {s}\n", .{failed_test_path});
     }
-    try stdout_writer.print("{}/{}\n", .{ pass, pass + fail });
+    try stdout_writer.print("passing: {}/{}\n", .{ pass, pass + fail });
 }
