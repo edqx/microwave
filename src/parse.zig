@@ -421,15 +421,24 @@ pub fn Parser(ScannerType: type) type {
 
                     const table_entry = try self.consumeTableAccessGetValuePtr(&root_table.table, .root) orelse return Error.UnexpectedToken;
                     if (is_many_table) {
-                        if (table_entry.* == .none) {
-                            table_entry.* = .{ .array_of_tables = .empty };
+                        switch (table_entry.*) {
+                            .none => {
+                                table_entry.* = .{ .array_of_tables = .empty };
+                            },
+                            .array_of_tables => {},
+                            else => return Error.DuplicateKey,
                         }
                         try table_entry.array_of_tables.append(self.allocator, .empty);
                         active_table = &table_entry.array_of_tables.items[table_entry.array_of_tables.items.len - 1];
                         if (try self.consumeToken(.array_end_or_table_end) == null) return Error.UnexpectedToken;
                     } else {
-                        if (table_entry.* != .none) return Error.DuplicateKey;
-                        table_entry.* = .{ .table = .empty };
+                        switch (table_entry.*) {
+                            .none => {
+                                table_entry.* = .{ .table = .empty };
+                            },
+                            .table => {},
+                            else => return Error.DuplicateKey,
+                        }
                         active_table = &table_entry.table;
                     }
                     if (try self.consumeToken(.array_end_or_table_end) == null) return Error.UnexpectedToken;
