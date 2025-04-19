@@ -21,6 +21,8 @@ pub fn main() !void {
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
     defer std.debug.assert(gpa.deinit() == .ok);
 
+    const stdout_writer = std.io.getStdOut().writer();
+
     const allocator = gpa.allocator();
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
@@ -58,7 +60,7 @@ pub fn main() !void {
     }
 
     for (failed_tests.items) |failed_test_path| {
-        try std.io.getStdOut().writer().print("- fail: {s}\n", .{failed_test_path});
+        try stdout_writer.print("- fail: {s}\n", .{failed_test_path});
     }
-    try std.io.getStdOut().writer().print("{}/{}\n", .{ pass, pass + fail });
+    try stdout_writer.print("{}/{}\n", .{ pass, pass + fail });
 }

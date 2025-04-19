@@ -13,6 +13,10 @@ pub const Token = struct {
         key,
         access,
         equals,
+        table_start,
+        table_end,
+        many_table_start,
+        many_table_end,
         literal_string,
         literal_base_integer,
         literal_integer,
@@ -24,8 +28,8 @@ pub const Token = struct {
         literal_local_date_time,
         literal_local_date,
         literal_local_time,
-        array_start_or_table_start,
-        array_end_or_table_end,
+        array_start,
+        array_end,
         inline_table_start,
         inline_table_end,
     };
@@ -57,6 +61,14 @@ pub const Token = struct {
     range: Range,
 };
 
+pub const State = enum {
+    key,
+    table_key,
+    inline_key,
+    value,
+    array_container,
+};
+
 const StringKind = enum {
     single_line,
     multiple_lines,
@@ -64,6 +76,7 @@ const StringKind = enum {
 
 buffer: []const u8,
 can_request_more: bool = false,
+state: State = .key,
 offset: usize = 0,
 
 fn isCommentChar(b: u8) bool {
@@ -458,20 +471,9 @@ fn consumeNumberLiteralToken(self: *Scanner) !?Token {
     return integer_part_range.token(.literal_integer);
 }
 
-pub fn next(self: *Scanner) !?Token {
-    const original_pos = self.offset;
-    errdefer self.offset = original_pos;
-
-    if (try self.consumeMany(isSpaceChar)) |range| return range.token(.whitespace);
-    if (try self.consumeMany(isWhitespaceChar)) |range| return range.token(.newline);
-    if (try self.consumeCommentLine()) |range| return range.token(.comment);
-    if (try self.consumeSingle(isAccessChar)) |range| return range.token(.access);
-    if (try self.consumeSingle(isEqualsChar)) |range| return range.token(.equals);
-    if (try self.consumeSingle(isArrayOpenChar)) |range| return range.token(.array_start_or_table_start);
-    if (try self.consumeSingle(isArrayCloseChar)) |range| return range.token(.array_end_or_table_end);
+fn consumeValueToken(self: *Scanner) !?Token {
+    if (try self.consumeSingle(isArrayOpenChar)) |range| return range.token(.array_start);
     if (try self.consumeSingle(isInlineTableOpenChar)) |range| return range.token(.inline_table_start);
-    if (try self.consumeSingle(isInlineTableCloseChar)) |range| return range.token(.inline_table_end);
-    if (try self.consumeSingle(isDelimeterChar)) |range| return range.token(.delimeter);
     const restore_pos = self.offset;
     if (try self.consumeDateTimeLiteralToken()) |date_time_token| {
         return date_time_token;
@@ -482,8 +484,64 @@ pub fn next(self: *Scanner) !?Token {
     if (try self.consumeString(.multiple_lines)) |string_range| return string_range.token(.literal_string);
     if (try self.consumeString(.single_line)) |string_range| return string_range.token(.literal_string);
     if (try self.consumeSlice("true") orelse try self.consumeSlice("false")) |range| return range.token(.literal_bool);
-    if (try self.consumeMany(isKeyChar)) |range| return range.token(.key);
+
+    return null;
+}
+
+pub fn next(self: *Scanner) !?Token {
+    const original_pos = self.offset;
+    errdefer self.offset = original_pos;
+
+    if (try self.consumeMany(isSpaceChar)) |range| return range.token(.whitespace);
+    if (try self.consumeMany(isWhitespaceChar)) |range| return range.token(.newline);
+
+    if (try self.consumeCommentLine()) |range| return range.token(.comment);
+
+    switch (self.state) {
+        inline .key, .table_key, .inline_key => |inner_state| {
+            if (try self.consumeSingle(isAccessChar)) |range| return range.token(.access);
+            if (try self.consumeString(.single_line)) |string_range| return string_range.token(.key);
+            if (try self.consumeMany(isKeyChar)) |range| return range.token(.key);
+            switch (inner_state) {
+                .key => {
+                    if (try self.consumeSingle(isEqualsChar)) |range| return range.token(.equals);
+                    if (try self.consumeSingle(isTableOpenChar)) |first_range| {
+                        if (try self.consumeSingle(isTableOpenChar)) |second_range| {
+                            return first_range.expand(second_range).token(.many_table_start);
+                        }
+                        return first_range.token(.table_start);
+                    }
+                },
+                .table_key => {
+                    if (try self.consumeSingle(isTableCloseChar)) |first_range| {
+                        if (try self.consumeSingle(isTableCloseChar)) |second_range| {
+                            return first_range.expand(second_range).token(.many_table_end);
+                        }
+                        return first_range.token(.table_end);
+                    }
+                },
+                .inline_key => {
+                    if (try self.consumeSingle(isEqualsChar)) |range| return range.token(.equals);
+                    if (try self.consumeSingle(isInlineTableCloseChar)) |range| return range.token(.inline_table_end);
+                    if (try self.consumeSingle(isDelimeterChar)) |range| return range.token(.delimeter);
+                },
+                else => unreachable,
+            }
+        },
+        .array_container => {
+            if (try self.consumeSingle(isArrayCloseChar)) |range| return range.token(.array_end);
+            if (try self.consumeSingle(isDelimeterChar)) |range| return range.token(.delimeter);
+            if (try self.consumeValueToken()) |token| return token;
+        },
+        .value => {
+            if (try self.consumeValueToken()) |token| return token;
+        },
+    }
     return if (self.reachedEnd(0)) null else Error.UnexpectedByte;
+}
+
+pub fn setState(self: *Scanner, state: State) void {
+    self.state = state;
 }
 
 pub fn cursor(self: *Scanner) usize {
@@ -536,15 +594,20 @@ fn expectToken(token: ?Token, kind: Token.Kind) !void {
 }
 
 fn testAnyScanner(scanner: anytype) !void {
+    scanner.setState(.key);
     try expectToken(try scanner.next(), .comment);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
+    scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
+    scanner.setState(.key);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
-    try expectToken(try scanner.next(), .array_start_or_table_start);
+    scanner.setState(.value);
+    try expectToken(try scanner.next(), .array_start);
+    scanner.setState(.array_container);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .literal_string);
     try expectToken(try scanner.next(), .delimeter);
@@ -554,73 +617,95 @@ fn testAnyScanner(scanner: anytype) !void {
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .literal_string);
     try expectToken(try scanner.next(), .newline);
-    try expectToken(try scanner.next(), .array_end_or_table_end);
+    try expectToken(try scanner.next(), .array_end);
+    scanner.setState(.key);
 
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
+    scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
+    scanner.setState(.key);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
+    scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
+    scanner.setState(.key);
     try expectToken(try scanner.next(), .whitespace);
     try expectToken(try scanner.next(), .comment);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
+    scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
-    try expectToken(try scanner.next(), .newline);
+    scanner.setState(.key);
 
-    try expectToken(try scanner.next(), .array_start_or_table_start);
-    try expectToken(try scanner.next(), .array_start_or_table_start);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .many_table_start);
+    scanner.setState(.table_key);
     try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .array_end_or_table_end);
-    try expectToken(try scanner.next(), .array_end_or_table_end);
+    try expectToken(try scanner.next(), .many_table_end);
+    scanner.setState(.key);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
+    scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
+    scanner.setState(.key);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
+    scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
-    try expectToken(try scanner.next(), .newline);
+    scanner.setState(.key);
 
-    try expectToken(try scanner.next(), .array_start_or_table_start);
-    try expectToken(try scanner.next(), .array_start_or_table_start);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .many_table_start);
+    scanner.setState(.table_key);
     try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .array_end_or_table_end);
-    try expectToken(try scanner.next(), .array_end_or_table_end);
+    try expectToken(try scanner.next(), .many_table_end);
+    scanner.setState(.key);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
+    scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
+    scanner.setState(.key);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
+    scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
+    scanner.setState(.key);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
-    try expectToken(try scanner.next(), .array_start_or_table_start);
+    scanner.setState(.value);
+    try expectToken(try scanner.next(), .array_start);
+    scanner.setState(.array_container);
     try expectToken(try scanner.next(), .literal_string);
-    try expectToken(try scanner.next(), .array_end_or_table_end);
-    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .array_end);
+    scanner.setState(.key);
 
-    try expectToken(try scanner.next(), .array_start_or_table_start);
-    try expectToken(try scanner.next(), .array_start_or_table_start);
+    try expectToken(try scanner.next(), .newline);
+    try expectToken(try scanner.next(), .many_table_start);
+    scanner.setState(.table_key);
     try expectToken(try scanner.next(), .key);
-    try expectToken(try scanner.next(), .array_end_or_table_end);
-    try expectToken(try scanner.next(), .array_end_or_table_end);
+    try expectToken(try scanner.next(), .many_table_end);
+    scanner.setState(.key);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
+    scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
+    scanner.setState(.key);
     try expectToken(try scanner.next(), .newline);
     try expectToken(try scanner.next(), .key);
     try expectToken(try scanner.next(), .equals);
+    scanner.setState(.value);
     try expectToken(try scanner.next(), .literal_string);
+    scanner.setState(.key);
 }
 
 test Scanner {
@@ -688,6 +773,10 @@ pub fn BufferedReaderScanner(comptime buf_size: usize, comptime ReaderType: type
             var next_token_in_buffer = try self.nextImpl() orelse return null;
             next_token_in_buffer.range = next_token_in_buffer.range.offset(self.buffer_global_offset);
             return next_token_in_buffer;
+        }
+
+        pub fn setState(self: *BufferedReaderScannerT, state: State) void {
+            self.scanner.state = state;
         }
 
         pub fn cursor(self: *BufferedReaderScannerT) usize {
