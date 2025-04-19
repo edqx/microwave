@@ -78,7 +78,10 @@ fn isKeyChar(b: u8) bool {
 }
 
 fn isUtcChar(b: u8) bool {
-    return b == 'Z';
+    return switch (b) {
+        'Z', 'z' => true,
+        else => false,
+    };
 }
 
 fn isDateSeparator(b: u8) bool {
@@ -91,7 +94,7 @@ fn isTimeSeparator(b: u8) bool {
 
 fn isDateTimeSeparator(b: u8) bool {
     return switch (b) {
-        ' ', 'T' => true,
+        ' ', 'T', 't' => true,
         else => false,
     };
 }
@@ -302,29 +305,28 @@ fn consumeCommentLine(self: *Scanner) !?Token.Range {
 }
 
 fn consumeString(self: *Scanner, kind: StringKind) !?Token.Range {
-    switch (kind) {
-        .single_line => if (try self.consumeSingle(isStringChar) == null) return null,
-        .multiple_lines => if (try self.consumeSlice("\"\"\"") == null) return null,
-    }
+    const string_char_kind: []const u8 = switch (kind) {
+        .single_line => if (try self.consumeSingle(isStringChar)) |range| self.rangeContents(range) else return null,
+        .multiple_lines => if (try self.consumeSlice("\"\"\"")) |range|
+            self.rangeContents(range)
+        else if (try self.consumeSlice("'''")) |range|
+            self.rangeContents(range)
+        else
+            return null,
+    };
 
     var escape = false;
     var range = try self.consumeNone();
     while (true) {
-        if (try self.consumeSingle(isStringEscapeChar)) |escape_range| {
-            range = range.expand(escape_range);
-        }
         switch (kind) {
             .single_line => {
                 if (isNewlineChar(try self.peekSingle())) return Error.UnexpectedByte;
-                if (!escape and try self.consumeSingle(isStringChar) != null) return range;
             },
-            .multiple_lines => {
-                if (!escape and try self.consumeSlice("\"\"\"") != null) return range;
-            },
+            .multiple_lines => {},
         }
+        if (!escape and try self.consumeSlice(string_char_kind) != null) return range;
         escape = !escape and isStringEscapeChar(try self.peekSingle());
         range = range.expand(try self.consumeAnySingle());
-        escape = false;
     }
     unreachable;
 }
@@ -431,6 +433,10 @@ fn consumeNumberLiteralToken(self: *Scanner) !?Token {
             return integer_part_range.expand(exponential_range).token(.literal_float);
         }
         return integer_part_range.expand(fraction_digits).token(.literal_float);
+    } else if (try self.consumeSingle(isExponentialSeparator) != null) {
+        _ = try self.consumeSingle(isNumberSign);
+        const exponential_range = try self.consumeMany(isBase10Digit) orelse return Error.UnexpectedByte;
+        return integer_part_range.expand(exponential_range).token(.literal_float);
     }
     return integer_part_range.token(.literal_integer);
 }
@@ -467,8 +473,12 @@ pub fn cursor(self: *Scanner) usize {
     return self.offset;
 }
 
+pub fn rangeContents(self: *Scanner, range: Token.Range) []const u8 {
+    return self.buffer[range.start..range.end];
+}
+
 pub fn tokenContents(self: *Scanner, token: Token) []const u8 {
-    return self.buffer[token.range.start..token.range.end];
+    return self.rangeContents(token.range);
 }
 
 const test_buf: []const u8 =
@@ -667,8 +677,12 @@ pub fn BufferedReaderScanner(comptime buf_size: usize, comptime ReaderType: type
             return self.buffer_global_offset + self.scanner.offset;
         }
 
+        pub fn rangeContents(self: *BufferedReaderScannerT, range: Token.Range) []const u8 {
+            return self.buffer[range.start - self.buffer_global_offset .. range.end - self.buffer_global_offset];
+        }
+
         pub fn tokenContents(self: *BufferedReaderScannerT, token: Token) []const u8 {
-            return self.buffer[token.range.start - self.buffer_global_offset .. token.range.end - self.buffer_global_offset];
+            return self.rangeContents(token.range);
         }
     };
 }

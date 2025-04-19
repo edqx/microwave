@@ -125,6 +125,7 @@ pub fn Parser(ScannerType: type) type {
 
         pub fn nextToken(self: *ParserT) !void {
             self.current_token = try self.scanner.next();
+            std.debug.print("token: {?}\n", .{self.current_token});
         }
 
         fn assertCurrentToken(self: *ParserT, token_kind: Scanner.Token.Kind) void {
@@ -212,7 +213,7 @@ pub fn Parser(ScannerType: type) type {
         }
 
         pub fn parseOffsetDateTimeValueAlloc(self: ParserT, token_contents: []const u8) !Value {
-            const offset_index = if (std.mem.endsWith(u8, token_contents, "Z"))
+            const offset_index = if (std.mem.lastIndexOfAny(u8, token_contents, "Zz") == token_contents.len - 1)
                 token_contents.len - 1
             else blk: {
                 const offset_separator = std.mem.lastIndexOfAny(u8, token_contents, "+-") orelse unreachable;
@@ -235,7 +236,7 @@ pub fn Parser(ScannerType: type) type {
         }
 
         pub fn parseLocalDateTimeValueAlloc(self: ParserT, token_contents: []const u8) !Value {
-            const time_index = (std.mem.indexOfAny(u8, token_contents, "T ") orelse unreachable) + 1;
+            const time_index = (std.mem.indexOfAny(u8, token_contents, "Tt ") orelse unreachable) + 1;
             const date_contents = token_contents[0 .. time_index - 1];
             const time_contents = token_contents[time_index..];
 
@@ -277,8 +278,19 @@ pub fn Parser(ScannerType: type) type {
             root,
         };
 
+        pub fn consumeAnyKey(self: *ParserT) !?Scanner.Token {
+            try self.consumeWhitespace();
+            const next_token = self.current_token orelse return null;
+            switch (next_token.kind) {
+                .key, .literal_string, .literal_base_integer, .literal_integer, .literal_float, .literal_inf, .literal_nan, .literal_bool, .literal_offset_date_time, .literal_local_date_time, .literal_local_date, .literal_local_time => {},
+                else => return null,
+            }
+            try self.nextToken();
+            return next_token;
+        }
+
         pub fn consumeTableAccessGetValuePtr(self: *ParserT, table: *Value.Table, mode: AccessMode) !?*Value {
-            const first_key_token = try self.consumeToken(.key) orelse return null;
+            const first_key_token = try self.consumeAnyKey() orelse return null;
             var parent_table: *Value.Table = table;
             var last_key_token: Scanner.Token = first_key_token;
 
@@ -287,7 +299,7 @@ pub fn Parser(ScannerType: type) type {
 
             var expecting_key = false;
             while (true) {
-                if (try self.consumeToken(.key)) |key_token| {
+                if (try self.consumeAnyKey()) |key_token| {
                     if (!expecting_key) return Error.UnexpectedToken;
                     const key_contents = self.scanner.tokenContents(last_key_token);
                     const nested_table_value = try parent_table.getOrPut(self.allocator, key_contents);
@@ -417,6 +429,9 @@ pub fn Parser(ScannerType: type) type {
             try self.nextToken();
 
             while (true) {
+                if (try self.consumeToken(.newline) != null) continue;
+                if (self.isEof()) break;
+                std.debug.print("{} {s}\n", .{ self.current_token.?.kind, self.scanner.tokenContents(self.current_token.?) });
                 if (try self.consumeToken(.array_start_or_table_start) != null) {
                     const is_many_table = try self.consumeToken(.array_start_or_table_start) != null;
 
@@ -448,12 +463,6 @@ pub fn Parser(ScannerType: type) type {
                     if (try self.consumeToken(.equals) == null) return Error.UnexpectedToken;
                     table_entry.* = try self.readValue();
                     errdefer table_entry.deinitRecursive(self.allocator);
-                } else if (try self.consumeToken(.comment) != null) {
-                    continue;
-                } else if (self.isEof()) {
-                    break;
-                } else if (try self.consumeToken(.newline) != null) {
-                    continue;
                 } else {
                     return Error.UnexpectedToken;
                 }
@@ -607,18 +616,13 @@ test Parser {
 
 test "parse test" {
     const res = try fromSlice(std.testing.allocator,
-        \\ints = [1, 2, 3, ]
-        \\floats = [1.1, 2.1, 3.1]
-        \\strings = ["a", "b", "c"]
-        \\dates = [
-        \\  1987-07-05T17:45:00Z,
-        \\  1979-05-27T07:32:00Z,
-        \\  2006-06-01T11:00:00Z,
-        \\]
-        \\comments = [
-        \\         1,
-        \\         2, #this is ok
-        \\]
+        \\2000-datetime       = 2000-02-29 15:15:15Z
+        \\2000-datetime-local = 2000-02-29 15:15:15
+        \\2000-date           = 2000-02-29
+        \\
+        \\2024-datetime       = 2024-02-29 15:15:15Z
+        \\2024-datetime-local = 2024-02-29 15:15:15
+        \\2024-date           = 2024-02-29
     );
     defer res.deinit();
 }
