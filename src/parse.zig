@@ -140,6 +140,7 @@ pub fn Parser(ScannerType: type) type {
             std.fmt.ParseIntError ||
             std.fmt.ParseFloatError ||
             ScannerType.Error ||
+            error{ InvalidUtf8, Utf8ExpectedContinuation, Utf8OverlongEncoding, Utf8EncodesSurrogateHalf, Utf8CodepointTooLarge } ||
             error{ UnexpectedToken, UnexpectedEof, UnexpectedEol, InvalidKeyAccess, DuplicateKey, InvalidDateTime, LeadingZero };
 
         allocator: std.mem.Allocator,
@@ -181,7 +182,25 @@ pub fn Parser(ScannerType: type) type {
         }
 
         pub fn parseStringValueAlloc(self: ParserT, token_contents: []const u8) !Value {
-            const string_contents = try self.allocator.dupe(u8, token_contents);
+            var result: std.ArrayListUnmanaged(u8) = try .initCapacity(self.allocator, token_contents.len);
+            defer result.deinit(self.allocator);
+
+            var writer = result.writer(self.allocator);
+
+            const codepoints = try std.unicode.Utf8View.init(token_contents);
+            var iter = codepoints.iterator();
+
+            while (iter.nextCodepointSlice()) |slice| {
+                const decoded_codepoint = try std.unicode.utf8Decode(slice);
+
+                if (decoded_codepoint == '\\') {
+                    // handle escapes
+                }
+
+                _ = try writer.write(slice);
+            }
+
+            const string_contents = try result.toOwnedSlice(self.allocator);
             errdefer self.allocator.free(string_contents);
             return .{ .string = string_contents };
         }

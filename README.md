@@ -378,10 +378,6 @@ relating to strings and encoding.
 - fail: invalid/control/rawmulti-us.toml
 - fail: invalid/encoding/bad-codepoint.toml
 - fail: invalid/encoding/bad-utf8-in-comment.toml
-- fail: invalid/encoding/bad-utf8-in-multiline.toml
-- fail: invalid/encoding/bad-utf8-in-multiline-literal.toml
-- fail: invalid/encoding/bad-utf8-in-string.toml
-- fail: invalid/encoding/bad-utf8-in-string-literal.toml
 - fail: invalid/float/leading-zero.toml
 - fail: invalid/float/leading-zero-neg.toml
 - fail: invalid/float/leading-zero-plus.toml
@@ -440,7 +436,7 @@ relating to strings and encoding.
 - fail: valid/string/escape-tricky.toml
 - fail: valid/string/multiline-quotes.toml
 - fail: valid/string/raw-multiline.toml
-passing: 476/557
+passing: 480/557
 ```
 
 ## License
