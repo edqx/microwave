@@ -410,6 +410,8 @@ pub fn Parser(ScannerType: type) type {
                     break;
                 }
                 try self.nextToken();
+                if (try self.consumeToken(.newline) != null) try self.nextToken();
+                if (try self.consumeToken(.inline_table_end) != null) break;
             }
 
             return table_value;
