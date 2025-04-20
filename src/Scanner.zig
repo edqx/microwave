@@ -247,6 +247,20 @@ fn isNotWhitespaceChar(b: u8) bool {
     return !isWhitespaceChar(b);
 }
 
+fn isControlSingleLine(b: u8) bool {
+    return switch (b) {
+        0x00...0x08, 0x0a...0x1f, 0x7f => true,
+        else => false,
+    };
+}
+
+fn isControlMultiline(b: u8) bool {
+    return switch (b) {
+        std.ascii.control_code.bs, std.ascii.control_code.ff => true,
+        else => false,
+    };
+}
+
 pub fn reachedEnd(self: *Scanner, offset_required: usize) bool {
     return !self.can_request_more and
         (self.buffer.len < offset_required or self.offset == self.buffer.len - offset_required);
@@ -336,9 +350,11 @@ fn consumeString(self: *Scanner, kind: StringKind) !?Token.Range {
     while (true) {
         switch (kind) {
             .single_line => {
-                if (isNewlineChar(try self.peekSingle())) return Error.UnexpectedByte;
+                if (isControlSingleLine(try self.peekSingle())) return Error.UnexpectedByte;
             },
-            .multiple_lines => {},
+            .multiple_lines => {
+                if (isControlMultiline(try self.peekSingle())) return Error.UnexpectedByte;
+            },
         }
         if (!escape and try self.consumeSlice(string_char_kind) != null) return range;
         escape = !escape and isStringEscapeChar(try self.peekSingle());

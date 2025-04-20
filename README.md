@@ -16,9 +16,7 @@ This parser should be spec compliant. (WIP, see [Spec Compliancy](#spec-complian
 These features are yet to be implemented, and are actively being worked on, in order
 of severity:
 - Parsing string escape codes (\n, \r, \u0000, .etc, see https://toml.io/en/v1.0.0#string)
-- Properly parsing date time (primitive implementation exists to split the date literal, see https://toml.io/en/v1.0.0#offset-date-time)
 - Some minor parsing issues, for example sometimes keys and tables can be re-defined
-- Invalid dates aren't checked (possibly won't be implemented)
 - Not all literals are checked against the spec (leading zeroes are currently allowed)
 
 ## Usage
@@ -378,15 +376,6 @@ relating to strings and encoding.
 - fail: invalid/control/rawmulti-lf.toml
 - fail: invalid/control/rawmulti-null.toml
 - fail: invalid/control/rawmulti-us.toml
-- fail: invalid/control/rawstring-del.toml
-- fail: invalid/control/rawstring-lf.toml
-- fail: invalid/control/rawstring-null.toml
-- fail: invalid/control/rawstring-us.toml
-- fail: invalid/control/string-bs.toml
-- fail: invalid/control/string-del.toml
-- fail: invalid/control/string-lf.toml
-- fail: invalid/control/string-null.toml
-- fail: invalid/control/string-us.toml
 - fail: invalid/encoding/bad-codepoint.toml
 - fail: invalid/encoding/bad-utf8-in-comment.toml
 - fail: invalid/encoding/bad-utf8-in-multiline.toml
@@ -451,7 +440,7 @@ relating to strings and encoding.
 - fail: valid/string/escape-tricky.toml
 - fail: valid/string/multiline-quotes.toml
 - fail: valid/string/raw-multiline.toml
-passing: 467/557
+passing: 476/557
 ```
 
 ## License
