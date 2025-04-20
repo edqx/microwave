@@ -460,16 +460,20 @@ pub fn Parser(ScannerType: type) type {
 
             var active_table = &root_table.table;
 
-            forever: while (true) {
+            var i: usize = 0;
+            while (true) : (i += 1) {
                 self.scanner.setState(.root);
                 try self.nextToken();
 
                 if (self.isEof()) break;
 
-                while (try self.consumeToken(.newline) != null) {
+                if (i > 0) {
+                    try self.expectToken(.newline);
                     try self.nextToken();
-                    if (self.isEof()) break :forever;
                 }
+
+                while (try self.consumeToken(.newline) != null) try self.nextToken();
+                if (self.isEof()) break;
 
                 if (try self.consumeTableAccessGetValuePtr(active_table, .inline_table, .equals)) |table_entry| {
                     if (table_entry.value_ptr.* != .none) return Error.DuplicateKey;

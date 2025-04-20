@@ -17,7 +17,7 @@ These features are yet to be implemented, and are actively being worked on, in o
 of severity:
 - Parsing string escape codes (\n, \r, \u0000, .etc, see https://toml.io/en/v1.0.0#string)
 - Properly parsing date time (primitive implementation exists to split the date literal, see https://toml.io/en/v1.0.0#offset-date-time)
-- Some minor parsing issues, for example sometimes keys are allowed after table declarations, when a newline should be required
+- Some minor parsing issues, for example sometimes keys and tables can be re-defined
 - Invalid dates aren't checked (possibly won't be implemented)
 - Not all literals are checked against the spec (leading zeroes are currently allowed)
 
@@ -422,10 +422,6 @@ relating to strings and encoding.
 - fail: invalid/integer/leading-zero-sign-1.toml
 - fail: invalid/integer/leading-zero-sign-2.toml
 - fail: invalid/integer/leading-zero-sign-3.toml
-- fail: invalid/key/after-array.toml
-- fail: invalid/key/after-table.toml
-- fail: invalid/key/after-value.toml
-- fail: invalid/key/no-eol.toml
 - fail: invalid/local-date/feb-29.toml
 - fail: invalid/local-date/feb-30.toml
 - fail: invalid/local-date/mday-over.toml
@@ -491,7 +487,6 @@ relating to strings and encoding.
 - fail: invalid/table/redefine-3.toml
 - fail: invalid/table/super-twice.toml
 - fail: valid/comment/everywhere.toml
-- fail: valid/comment/noeol.toml
 - fail: valid/inline-table/newline.toml
 - fail: valid/key/quoted-unicode.toml
 - fail: valid/spec/string-4.toml
@@ -501,7 +496,7 @@ relating to strings and encoding.
 - fail: valid/string/multiline-quotes.toml
 - fail: valid/string/raw-multiline.toml
 - fail: valid/string/start-mb.toml
-passing: 417/557
+passing: 422/557
 ```
 
 ## License
