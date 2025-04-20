@@ -379,6 +379,8 @@ relating to strings and encoding.
 - fail: invalid/control/rawmulti-us.toml
 - fail: invalid/encoding/bad-codepoint.toml
 - fail: invalid/encoding/bad-utf8-in-comment.toml
+- fail: invalid/encoding/bad-utf8-in-multiline-literal.toml
+- fail: invalid/encoding/bad-utf8-in-string-literal.toml
 - fail: invalid/float/leading-zero.toml
 - fail: invalid/float/leading-zero-neg.toml
 - fail: invalid/float/leading-zero-plus.toml
@@ -395,11 +397,6 @@ relating to strings and encoding.
 - fail: invalid/spec/inline-table-2-0.toml
 - fail: invalid/spec/table-9-0.toml
 - fail: invalid/spec/table-9-1.toml
-- fail: invalid/string/bad-escape-2.toml
-- fail: invalid/string/multiline-bad-escape-2.toml
-- fail: invalid/string/multiline-bad-escape-3.toml
-- fail: invalid/string/multiline-escape-space-1.toml
-- fail: invalid/string/multiline-escape-space-2.toml
 - fail: invalid/table/append-with-dotted-keys-1.toml
 - fail: invalid/table/append-with-dotted-keys-2.toml
 - fail: invalid/table/duplicate.toml
@@ -411,17 +408,13 @@ relating to strings and encoding.
 - fail: valid/key/quoted-unicode.toml
 - fail: valid/spec/string-4.toml
 - fail: valid/spec/string-5.toml
-- fail: valid/spec/string-6.toml
 - fail: valid/spec/string-7.toml
 - fail: valid/string/escape-esc.toml
 - fail: valid/string/escape-tricky.toml
-- fail: valid/string/hex-escape.toml
 - fail: valid/string/multiline-quotes.toml
-- fail: valid/string/nl.toml
 - fail: valid/string/quoted-unicode.toml
-- fail: valid/string/raw.toml
 - fail: valid/string/raw-multiline.toml
-passing: 496/557
+passing: 503/557
 ```
 
 ## License

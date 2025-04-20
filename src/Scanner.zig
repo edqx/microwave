@@ -18,6 +18,7 @@ pub const Token = struct {
         many_table_start,
         many_table_end,
         literal_string,
+        literal_literal_string, // this is dumb.
         literal_base_integer,
         literal_integer,
         literal_float,
@@ -334,8 +335,8 @@ fn consumeCommentLine(self: *Scanner) !?Token.Range {
     return try self.consumeMany(isNotNewlineChar) orelse return self.consumeNone();
 }
 
-fn consumeString(self: *Scanner, kind: StringKind) !?Token.Range {
-    const string_char_kind: []const u8 = switch (kind) {
+fn consumeString(self: *Scanner, kind: StringKind) !?struct { literal_string: bool, contents_range: Token.Range } {
+    const end_delimeter: []const u8 = switch (kind) {
         .single_line => if (try self.consumeSingle(isStringChar)) |range| self.rangeContents(range) else return null,
         .multiple_lines => if (try self.consumeSlice("\"\"\"")) |range|
             self.rangeContents(range)
@@ -344,6 +345,8 @@ fn consumeString(self: *Scanner, kind: StringKind) !?Token.Range {
         else
             return null,
     };
+
+    const is_literal_string = end_delimeter[0] == '\'';
 
     var escape = false;
     var range = self.consumeNone();
@@ -356,7 +359,7 @@ fn consumeString(self: *Scanner, kind: StringKind) !?Token.Range {
                 if (isControlMultiline(try self.peekSingle())) return Error.UnexpectedByte;
             },
         }
-        if (!escape and try self.consumeSlice(string_char_kind) != null) return range;
+        if (!escape and try self.consumeSlice(end_delimeter) != null) return .{ .literal_string = is_literal_string, .contents_range = range };
         escape = !escape and isStringEscapeChar(try self.peekSingle());
         range = range.expand(try self.consumeAnySingle());
     }
@@ -502,8 +505,9 @@ fn consumeValueToken(self: *Scanner) !?Token {
         self.offset = restore_pos;
     }
     if (try self.consumeNumberLiteralToken()) |number_token| return number_token;
-    if (try self.consumeString(.multiple_lines)) |string_range| return string_range.token(.literal_string);
-    if (try self.consumeString(.single_line)) |string_range| return string_range.token(.literal_string);
+    if (try self.consumeString(.multiple_lines) orelse try self.consumeString(.single_line)) |string_info| {
+        return string_info.contents_range.token(if (string_info.literal_string) .literal_literal_string else .literal_string);
+    }
     if (try self.consumeSlice("true") orelse try self.consumeSlice("false")) |range| return range.token(.literal_bool);
 
     return null;
@@ -521,7 +525,7 @@ pub fn next(self: *Scanner) !?Token {
     switch (self.state) {
         inline .root, .table_key, .inline_key => |inner_state| {
             if (try self.consumeSingle(isAccessChar)) |range| return range.token(.access);
-            if (try self.consumeString(.single_line)) |string_range| return string_range.token(.key);
+            if (try self.consumeString(.single_line)) |string_range| return string_range.contents_range.token(.key);
             if (try self.consumeMany(isKeyChar)) |range| return range.token(.key);
             switch (inner_state) {
                 .root => {

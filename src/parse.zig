@@ -181,6 +181,12 @@ pub fn Parser(ScannerType: type) type {
             return self.current_token == null;
         }
 
+        pub fn parseLiteralStringValueAlloc(self: ParserT, token_contents: []const u8) !Value {
+            const string_contents = try self.allocator.dupe(u8, token_contents);
+            errdefer self.allocator.free(string_contents);
+            return .{ .string = string_contents };
+        }
+
         pub fn parseStringValueAlloc(self: ParserT, token_contents: []const u8) !Value {
             var result: std.ArrayListUnmanaged(u8) = try .initCapacity(self.allocator, token_contents.len);
             defer result.deinit(self.allocator);
@@ -199,13 +205,21 @@ pub fn Parser(ScannerType: type) type {
                     iter.i += 1;
                     var unicode_buf: [4]u8 = undefined;
                     _ = try writer.writeAll(switch (next_byte) {
-                        '\r', '\n', '\t', ' ' => {
+                        '\r', '\n', '\t', ' ' => |tag| {
+                            var encounted_newline = tag == '\r' or tag == '\n';
                             while (true) : (iter.i += 1) {
                                 if (iter.i >= token_contents.len) break;
                                 switch (token_contents[iter.i]) {
-                                    '\r', '\n', '\t', ' ' => continue,
+                                    '\n' => {
+                                        encounted_newline = true;
+                                        continue;
+                                    },
+                                    '\r', '\t', ' ' => continue,
                                     else => break,
                                 }
+                            }
+                            if (!encounted_newline) {
+                                return Error.InvalidEscape;
                             }
                             continue;
                         },
@@ -217,8 +231,9 @@ pub fn Parser(ScannerType: type) type {
                         'n' => "\n",
                         'f' => &.{std.ascii.control_code.ff},
                         'r' => "\r",
-                        inline 'u', 'U' => |tag| blk: {
+                        inline 'x', 'u', 'U' => |tag| blk: {
                             const num_nibbles = switch (tag) {
+                                'x' => 2,
                                 'u' => 4,
                                 'U' => 8,
                                 else => unreachable,
@@ -604,6 +619,7 @@ pub fn Parser(ScannerType: type) type {
                 .inline_table_start,
                 => return try self.consumeInlineTableValue() orelse
                     try self.consumeArrayValue() orelse return Error.UnexpectedToken,
+                .literal_literal_string => try self.parseLiteralStringValueAlloc(token_contents),
                 .literal_string => try self.parseStringValueAlloc(token_contents),
                 .literal_base_integer => try self.parseBaseIntegerValue(token_contents),
                 .literal_integer => try self.parseIntegerValue(token_contents),
