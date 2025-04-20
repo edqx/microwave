@@ -479,6 +479,7 @@ relating to strings and encoding.
 - fail: invalid/string/multiline-bad-escape-3.toml
 - fail: invalid/string/multiline-escape-space-1.toml
 - fail: invalid/string/multiline-escape-space-2.toml
+- fail: invalid/table/append-with-dotted-keys-1.toml
 - fail: invalid/table/append-with-dotted-keys-2.toml
 - fail: invalid/table/duplicate.toml
 - fail: invalid/table/duplicate-key-dotted-table.toml
@@ -486,8 +487,6 @@ relating to strings and encoding.
 - fail: invalid/table/redefine-2.toml
 - fail: invalid/table/redefine-3.toml
 - fail: invalid/table/super-twice.toml
-- fail: valid/comment/everywhere.toml
-- fail: valid/inline-table/newline.toml
 - fail: valid/key/quoted-unicode.toml
 - fail: valid/spec/string-4.toml
 - fail: valid/spec/string-5.toml
@@ -495,8 +494,7 @@ relating to strings and encoding.
 - fail: valid/string/escape-tricky.toml
 - fail: valid/string/multiline-quotes.toml
 - fail: valid/string/raw-multiline.toml
-- fail: valid/string/start-mb.toml
-passing: 422/557
+passing: 424/557
 ```
 
 ## License

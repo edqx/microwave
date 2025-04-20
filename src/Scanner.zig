@@ -266,7 +266,7 @@ fn peekAdvance(self: *Scanner, offset: usize) !u8 {
     return (try self.peekMany(offset))[offset - 1];
 }
 
-fn consumeNone(self: *Scanner) !Token.Range {
+fn consumeNone(self: *Scanner) Token.Range {
     return .{
         .start = self.offset,
         .end = self.offset,
@@ -317,7 +317,7 @@ fn consumeSlice(self: *Scanner, slice: []const u8) !?Token.Range {
 
 fn consumeCommentLine(self: *Scanner) !?Token.Range {
     if (try self.consumeSingle(isCommentChar) == null) return null;
-    return try self.consumeMany(isNotNewlineChar);
+    return try self.consumeMany(isNotNewlineChar) orelse return self.consumeNone();
 }
 
 fn consumeString(self: *Scanner, kind: StringKind) !?Token.Range {
@@ -332,7 +332,7 @@ fn consumeString(self: *Scanner, kind: StringKind) !?Token.Range {
     };
 
     var escape = false;
-    var range = try self.consumeNone();
+    var range = self.consumeNone();
     while (true) {
         switch (kind) {
             .single_line => {
@@ -421,12 +421,17 @@ fn consumeOffset(self: *Scanner) !?Token.Range {
 
 fn consumeDateTimeLiteralToken(self: *Scanner) !?Token {
     if (try self.consumeDate()) |date_range| {
+        const original_pos = self.offset;
+
         if (try self.consumeSingle(isDateTimeSeparator)) |_| {
-            const time_range = try self.consumeTime() orelse return Error.UnexpectedByte;
-            if (try self.consumeOffset()) |offset_range| {
-                return date_range.expand(offset_range).token(.literal_offset_date_time);
+            if (try self.consumeTime()) |time_range| {
+                if (try self.consumeOffset()) |offset_range| {
+                    return date_range.expand(offset_range).token(.literal_offset_date_time);
+                }
+                return date_range.expand(time_range).token(.literal_local_date_time);
+            } else {
+                self.offset = original_pos;
             }
-            return date_range.expand(time_range).token(.literal_local_date_time);
         }
         return date_range.token(.literal_local_date);
     }

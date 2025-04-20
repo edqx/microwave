@@ -344,7 +344,9 @@ pub fn Parser(ScannerType: type) type {
             var array_value: Value = .{ .array = .empty };
             errdefer array_value.deinitRecursive(self.allocator);
 
-            if (try self.consumeToken(.newline) != null) try self.nextToken();
+            while (try self.consumeToken(.newline) != null) {
+                try self.nextToken();
+            }
             if (try self.consumeToken(.array_end) != null) {
                 return array_value;
             }
@@ -359,14 +361,14 @@ pub fn Parser(ScannerType: type) type {
                 try array_value.array.append(self.allocator, element);
                 errdefer _ = array_value.array.pop();
 
-                if (try self.consumeToken(.newline) != null) try self.nextToken();
+                while (try self.consumeToken(.newline) != null) try self.nextToken();
                 if (try self.consumeToken(.delimeter) == null) {
-                    if (try self.consumeToken(.newline) != null) try self.nextToken();
+                    while (try self.consumeToken(.newline) != null) try self.nextToken();
                     try self.expectToken(.array_end);
                     break;
                 }
                 try self.nextToken();
-                if (try self.consumeToken(.newline) != null) try self.nextToken();
+                while (try self.consumeToken(.newline) != null) try self.nextToken();
                 if (try self.consumeToken(.array_end) != null) break;
             }
 
@@ -381,7 +383,7 @@ pub fn Parser(ScannerType: type) type {
             var table_value: Value = .{ .table = .empty };
             errdefer table_value.deinitRecursive(self.allocator);
 
-            if (try self.consumeToken(.newline) != null) try self.nextToken();
+            while (try self.consumeToken(.newline) != null) try self.nextToken();
             if (try self.consumeToken(.inline_table_end) != null) {
                 return table_value;
             }
@@ -403,14 +405,14 @@ pub fn Parser(ScannerType: type) type {
                 errdefer table_entry.value_ptr.deinitRecursive(self.allocator);
                 try self.nextToken();
 
-                if (try self.consumeToken(.newline) != null) try self.nextToken();
+                while (try self.consumeToken(.newline) != null) try self.nextToken();
                 if (try self.consumeToken(.delimeter) == null) {
-                    if (try self.consumeToken(.newline) != null) try self.nextToken();
+                    while (try self.consumeToken(.newline) != null) try self.nextToken();
                     try self.expectToken(.inline_table_end);
                     break;
                 }
                 try self.nextToken();
-                if (try self.consumeToken(.newline) != null) try self.nextToken();
+                while (try self.consumeToken(.newline) != null) try self.nextToken();
                 if (try self.consumeToken(.inline_table_end) != null) break;
             }
 
@@ -470,7 +472,10 @@ pub fn Parser(ScannerType: type) type {
                 if (self.isEof()) break;
 
                 if (i > 0) {
-                    try self.expectToken(.newline);
+                    self.expectToken(.newline) catch |e| switch (e) {
+                        Error.UnexpectedToken => if (self.isEof()) break else return e,
+                        else => return e,
+                    };
                     try self.nextToken();
                 }
 
@@ -681,19 +686,34 @@ test Parser {
 
 test "parse test" {
     const res = try fromSlice(std.testing.allocator,
-        \\ints = [1, 2, 3, ]
-        \\floats = [1.1, 2.1, 3.1]
-        \\strings = ["a", "b", "c"]
-        \\dates = [
-        \\  1987-07-05T17:45:00Z,
-        \\  1979-05-27T07:32:00Z,
-        \\  2006-06-01T11:00:00Z,
-        \\]
-        \\comments = [
-        \\         1,
-        \\         2, #this is ok
-        \\]
+        \\# Top comment.
+        \\  # Top comment.
+        \\# Top comment.
         \\
+        \\# [no-extraneous-groups-please]
+        \\
+        \\[group] # Comment
+        \\answer = 42 # Comment
+        \\# no-extraneous-keys-please = 999
+        \\# Inbetween comment.
+        \\more = [ # Comment
+        \\  # What about multiple # comments?
+        \\  # Can you handle it?
+        \\  #
+        \\          # Evil.
+        \\# Evil.
+        \\  42, 42, # Comments within arrays are fun.
+        \\  # What about multiple # comments?
+        \\  # Can you handle it?
+        \\  #
+        \\          # Evil.
+        \\# Evil.
+        \\# ] Did I fool you?
+        \\] # Hopefully not.
+        \\
+        \\# Make sure the space between the datetime and "#" isn't lexed.
+        \\dt = 1979-05-27T07:32:12-07:00  # c
+        \\d = 1979-05-27 # Comment
     );
     defer res.deinit();
 }
