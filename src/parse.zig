@@ -7,30 +7,50 @@ pub const Value = union(enum) {
     pub const Array = std.ArrayListUnmanaged(Value);
     pub const ArrayOfTables = std.ArrayListUnmanaged(Table);
 
-    pub const DateTime = struct {
-        date: ?[]const u8 = null,
-        time: ?[]const u8 = null,
-        offset: ?[]const u8 = null,
+    pub const DateTime = union(enum) {
+        pub const Year = std.math.IntFittingRange(0, 10000);
+        pub const Month = std.math.IntFittingRange(1, 12);
+        pub const Day = std.math.IntFittingRange(1, 31);
 
-        pub fn dupe(self: DateTime, allocator: std.mem.Allocator) !DateTime {
-            const new_date = if (self.date) |date| try allocator.dupe(u8, date) else null;
-            errdefer if (new_date) |date| allocator.free(date);
-            const new_time = if (self.time) |time| try allocator.dupe(u8, time) else null;
-            errdefer if (new_time) |time| allocator.free(time);
-            const new_offset = if (self.offset) |offset| try allocator.dupe(u8, offset) else null;
-            errdefer if (new_offset) |offset| allocator.free(offset);
-            return .{
-                .date = new_date,
-                .time = new_time,
-                .offset = new_offset,
-            };
-        }
+        pub const Hour = std.math.IntFittingRange(0, 23);
+        pub const OffsetHour = std.math.IntFittingRange(-24, 24);
+        pub const Minute = std.math.IntFittingRange(0, 59);
+        pub const Second = std.math.IntFittingRange(0, 59);
+        pub const Millisecond = u64;
 
-        pub fn deinit(self: DateTime, allocator: std.mem.Allocator) void {
-            if (self.offset) |offset| allocator.free(offset);
-            if (self.time) |time| allocator.free(time);
-            if (self.date) |date| allocator.free(date);
-        }
+        pub const Date = struct {
+            year: Year,
+            month: Month,
+            day: Day,
+        };
+
+        pub const Offset = struct {
+            hour: OffsetHour,
+            minute: Minute,
+
+            pub fn isUtc(self: Offset) bool {
+                return self.hour == 0 and self.minute == 0;
+            }
+        };
+
+        pub const Time = struct {
+            hour: Hour,
+            minute: Minute,
+            second: ?Second,
+            millisecond: ?u64,
+        };
+
+        just_date: Date,
+        just_time: Time,
+        local_date_time: struct {
+            date: Date,
+            time: Time,
+        },
+        offset_date_time: struct {
+            date: Date,
+            time: Time,
+            offset: Offset,
+        },
     };
 
     none: void,
@@ -79,7 +99,7 @@ pub const Value = union(enum) {
             },
             .string => |string_value| .{ .string = try allocator.dupe(u8, string_value) },
             .integer, .float, .boolean => self,
-            .date_time => |date_time_value| .{ .date_time = try date_time_value.dupe(allocator) },
+            .date_time => self,
         };
     }
 
@@ -102,7 +122,7 @@ pub const Value = union(enum) {
             },
             .string => |string_value| allocator.free(string_value),
             .integer, .float, .boolean => {},
-            .date_time => |date_time_value| date_time_value.deinit(allocator),
+            .date_time => {},
         }
     }
 };
@@ -120,7 +140,7 @@ pub fn Parser(ScannerType: type) type {
             std.fmt.ParseIntError ||
             std.fmt.ParseFloatError ||
             ScannerType.Error ||
-            error{ UnexpectedToken, UnexpectedEof, UnexpectedEol, InvalidKeyAccess, DuplicateKey, LeadingZero };
+            error{ UnexpectedToken, UnexpectedEof, UnexpectedEol, InvalidKeyAccess, DuplicateKey, InvalidDateTime, LeadingZero };
 
         allocator: std.mem.Allocator,
         scanner: *ScannerType,
@@ -214,63 +234,144 @@ pub fn Parser(ScannerType: type) type {
             return .{ .boolean = is_true };
         }
 
-        pub fn parseOffsetDateTimeValueAlloc(self: ParserT, token_contents: []const u8) !Value {
+        pub fn parseOffsetDateTimeValue(self: ParserT, token_contents: []const u8) !Value {
             const offset_index = if (std.mem.lastIndexOfAny(u8, token_contents, "Zz") == token_contents.len - 1)
                 token_contents.len - 1
             else blk: {
                 const offset_separator = std.mem.lastIndexOfAny(u8, token_contents, "+-") orelse unreachable;
                 break :blk offset_separator;
             };
-            const offset_contents = try self.allocator.dupe(u8, token_contents[offset_index..]);
-            errdefer self.allocator.free(offset_contents);
-            const datetime_contents = token_contents[0..offset_index];
 
-            const local_date_time_value = try self.parseLocalDateTimeValueAlloc(datetime_contents);
-            errdefer local_date_time_value.deinitRecursive(self.allocator);
+            const datetime_contents = token_contents[0..offset_index];
+            const offset_contents = token_contents[offset_index..];
+
+            const local_date_time = try self.parseLocalDateTimeValue(datetime_contents);
+
+            const offset: Value.DateTime.Offset = if (offset_contents.len == 1 and (offset_contents[0] == 'Z' or offset_contents[0] == 'z')) .{
+                .hour = 0,
+                .minute = 0,
+            } else parse_offset: {
+                var time_parts = std.mem.tokenizeAny(u8, offset_contents, ":");
+
+                const hour_part = time_parts.next().?;
+                if (hour_part.len < 2) return Error.InvalidDateTime;
+                const minute_part = time_parts.next().?;
+                if (minute_part.len < 2) return Error.InvalidDateTime;
+
+                var offset: Value.DateTime.Offset = .{
+                    .hour = 0,
+                    .minute = 0,
+                };
+                offset.hour = std.fmt.parseInt(Value.DateTime.OffsetHour, hour_part, 10) catch return Error.InvalidDateTime;
+                if (offset.hour <= -24 or offset.hour >= 24) return Error.InvalidDateTime;
+                offset.minute = std.fmt.parseInt(Value.DateTime.Minute, minute_part, 10) catch return Error.InvalidDateTime;
+                if (offset.minute >= 60) return Error.InvalidDateTime;
+
+                break :parse_offset offset;
+            };
 
             return .{
                 .date_time = .{
-                    .date = local_date_time_value.date_time.date,
-                    .time = local_date_time_value.date_time.time,
-                    .offset = local_date_time_value.date_time.offset,
+                    .offset_date_time = .{
+                        .date = local_date_time.date_time.local_date_time.date,
+                        .time = local_date_time.date_time.local_date_time.time,
+                        .offset = offset,
+                    },
                 },
             };
         }
 
-        pub fn parseLocalDateTimeValueAlloc(self: ParserT, token_contents: []const u8) !Value {
+        pub fn parseLocalDateTimeValue(self: ParserT, token_contents: []const u8) !Value {
             const time_index = (std.mem.indexOfAny(u8, token_contents, "Tt ") orelse unreachable) + 1;
             const date_contents = token_contents[0 .. time_index - 1];
             const time_contents = token_contents[time_index..];
 
-            var local_date_value = try self.parseLocalDateValueAlloc(date_contents);
-            errdefer local_date_value.deinitRecursive(self.allocator);
-            var local_time_value = try self.parseLocalDateValueAlloc(time_contents);
-            errdefer local_time_value.deinitRecursive(self.allocator);
+            const local_date_value = try self.parseLocalDateValue(date_contents);
+            const local_time_value = try self.parseLocalTimeValue(time_contents);
 
             return .{
                 .date_time = .{
-                    .date = local_date_value.date_time.date,
-                    .time = local_time_value.date_time.time,
+                    .local_date_time = .{
+                        .date = local_date_value.date_time.just_date,
+                        .time = local_time_value.date_time.just_time,
+                    },
                 },
             };
         }
 
-        pub fn parseLocalDateValueAlloc(self: ParserT, token_contents: []const u8) !Value {
-            const date_contents = try self.allocator.dupe(u8, token_contents);
-            errdefer self.allocator.free(date_contents);
+        pub fn parseLocalDateValue(self: ParserT, token_contents: []const u8) !Value {
+            _ = self;
+
+            var time_parts = std.mem.tokenizeAny(u8, token_contents, "-");
+
+            const year_part = time_parts.next().?;
+            const month_part = time_parts.next().?;
+            if (month_part.len < 2) return Error.InvalidDateTime;
+
+            const day_part = time_parts.next().?;
+            if (day_part.len < 2) return Error.InvalidDateTime;
+
+            var date: Value.DateTime.Date = .{
+                .year = 0,
+                .month = 0,
+                .day = 0,
+            };
+            date.year = std.fmt.parseInt(Value.DateTime.Year, year_part, 10) catch return Error.InvalidDateTime;
+            if (date.year >= 10_000) return Error.InvalidDateTime;
+            date.month = std.fmt.parseInt(Value.DateTime.Month, month_part, 10) catch return Error.InvalidDateTime;
+            if (date.month < 1 or date.month > 12) return Error.InvalidDateTime;
+            date.day = std.fmt.parseInt(Value.DateTime.Day, day_part, 10) catch return Error.InvalidDateTime;
+            if (date.day < 1 or date.day > 31) return Error.InvalidDateTime;
+
+            const is_leap_year = (date.year % 4 == 0) and (date.year % 100 != 0 or date.year % 400 == 0);
+            const month_dates: []const usize = &.{ 31, if (is_leap_year) 29 else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+            if (date.day > month_dates[date.month - 1]) return Error.InvalidDateTime;
+
             return .{
                 .date_time = .{
-                    .date = date_contents,
+                    .just_date = date,
                 },
             };
         }
 
-        pub fn parseLocalTimeValueAlloc(self: ParserT, token_contents: []const u8) !Value {
-            const time_contents = try self.allocator.dupe(u8, token_contents);
-            errdefer self.allocator.free(time_contents);
+        pub fn parseLocalTimeValue(self: ParserT, token_contents: []const u8) !Value {
+            _ = self;
+
+            var millisecond_parts = std.mem.tokenizeAny(u8, token_contents, ".");
+
+            const non_millisecond_part = millisecond_parts.next().?;
+            var time_parts = std.mem.tokenizeAny(u8, non_millisecond_part, ":");
+
+            const hour_part = time_parts.next().?;
+            if (hour_part.len < 2) return Error.InvalidDateTime;
+            const minute_part = time_parts.next().?;
+            if (minute_part.len < 2) return Error.InvalidDateTime;
+
+            const second_part = time_parts.next();
+            const millisecond_part = millisecond_parts.next();
+
+            var time: Value.DateTime.Time = .{
+                .hour = 0,
+                .minute = 0,
+                .second = null,
+                .millisecond = null,
+            };
+            time.hour = std.fmt.parseInt(Value.DateTime.Hour, hour_part, 10) catch return Error.InvalidDateTime;
+            if (time.hour >= 24) return Error.InvalidDateTime;
+            time.minute = std.fmt.parseInt(Value.DateTime.Minute, minute_part, 10) catch return Error.InvalidDateTime;
+            if (time.minute >= 60) return Error.InvalidDateTime;
+            if (second_part) |second_str| {
+                if (second_str.len < 2) return Error.InvalidDateTime;
+                time.second = std.fmt.parseInt(Value.DateTime.Second, second_str, 10) catch return Error.InvalidDateTime;
+                if (time.second.? >= 60) return Error.InvalidDateTime;
+                if (millisecond_part) |millisecond_str| {
+                    time.millisecond = std.fmt.parseInt(Value.DateTime.Millisecond, millisecond_str, 10) catch return Error.InvalidDateTime;
+                }
+            }
+
             return .{
                 .date_time = .{
-                    .time = time_contents,
+                    .just_time = time,
                 },
             };
         }
@@ -450,10 +551,10 @@ pub fn Parser(ScannerType: type) type {
                 .literal_inf => try self.parseInfValue(),
                 .literal_nan => try self.parseNanValue(),
                 .literal_bool => try self.parseBoolValue(token_contents),
-                .literal_offset_date_time => try self.parseOffsetDateTimeValueAlloc(token_contents),
-                .literal_local_date_time => try self.parseLocalDateTimeValueAlloc(token_contents),
-                .literal_local_date => try self.parseLocalDateValueAlloc(token_contents),
-                .literal_local_time => try self.parseLocalTimeValueAlloc(token_contents),
+                .literal_offset_date_time => try self.parseOffsetDateTimeValue(token_contents),
+                .literal_local_date_time => try self.parseLocalDateTimeValue(token_contents),
+                .literal_local_date => try self.parseLocalDateValue(token_contents),
+                .literal_local_time => try self.parseLocalTimeValue(token_contents),
             };
             return value;
         }

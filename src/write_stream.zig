@@ -206,23 +206,52 @@ pub fn Stream(WriterT: type, comptime options: Options) type {
             self.finishValue();
         }
 
+        fn writeDate(self: *WriteStreamT, date: parse.Value.DateTime.Date) !void {
+            try self.underlying_writer.print("{d}-{d}-{d}", .{ date.year, date.month, date.day });
+        }
+
+        fn writeTime(self: *WriteStreamT, time: parse.Value.DateTime.Time) !void {
+            try self.underlying_writer.print("{d}:{d}", .{ time.hour, time.minute });
+            if (time.second) |second| {
+                try self.underlying_writer.print(":{d}", .{second});
+                if (time.millisecond) |millisecond| {
+                    try self.underlying_writer.print(".{d}", .{millisecond});
+                }
+            }
+        }
+
+        fn writeDateTimeSeparator(self: *WriteStreamT) !void {
+            try self.underlying_writer.writeAll(switch (options.date_time_separator) {
+                .space => " ",
+                .t => "T",
+            });
+        }
+
         pub fn writeDateTime(self: *WriteStreamT, date_time: parse.Value.DateTime) !void {
             self.assertCanWriteValue();
             try self.writeDelimeter();
-            if (date_time.date) |date| {
-                try self.underlying_writer.writeAll(date);
-            }
-            if (date_time.time) |time| {
-                if (date_time.date != null) try self.underlying_writer.writeAll(switch (options.date_time_separator) {
-                    .space => " ",
-                    .t => "T",
-                });
-                try self.underlying_writer.writeAll(time);
-            }
-            if (date_time.date != null and date_time.time != null) {
-                if (date_time.offset) |offset| {
-                    try self.underlying_writer.writeAll(offset);
-                }
+            switch (date_time) {
+                .just_date => |date| {
+                    try self.writeDate(date);
+                },
+                .just_time => |time| {
+                    try self.writeTime(time);
+                },
+                .local_date_time => |both| {
+                    try self.writeDate(both.date);
+                    try self.writeDateTimeSeparator();
+                    try self.writeTime(both.time);
+                },
+                .offset_date_time => |all| {
+                    try self.writeDate(all.date);
+                    try self.writeDateTimeSeparator();
+                    try self.writeTime(all.time);
+                    if (all.offset.isUtc()) {
+                        try self.underlying_writer.writeAll("Z");
+                    } else {
+                        try self.underlying_writer.print("{d}:{d}", .{ all.offset.hour, all.offset.minute });
+                    }
+                },
             }
             self.finishValue();
         }

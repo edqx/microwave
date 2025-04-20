@@ -387,22 +387,6 @@ relating to strings and encoding.
 - fail: invalid/control/string-lf.toml
 - fail: invalid/control/string-null.toml
 - fail: invalid/control/string-us.toml
-- fail: invalid/datetime/feb-29.toml
-- fail: invalid/datetime/feb-30.toml
-- fail: invalid/datetime/hour-over.toml
-- fail: invalid/datetime/mday-over.toml
-- fail: invalid/datetime/mday-under.toml
-- fail: invalid/datetime/minute-over.toml
-- fail: invalid/datetime/month-over.toml
-- fail: invalid/datetime/month-under.toml
-- fail: invalid/datetime/no-leads.toml
-- fail: invalid/datetime/no-leads-month.toml
-- fail: invalid/datetime/no-leads-with-milli.toml
-- fail: invalid/datetime/offset-overflow-hour.toml
-- fail: invalid/datetime/offset-overflow-minute.toml
-- fail: invalid/datetime/second-over.toml
-- fail: invalid/datetime/time-no-leads.toml
-- fail: invalid/datetime/y10k.toml
 - fail: invalid/encoding/bad-codepoint.toml
 - fail: invalid/encoding/bad-utf8-in-comment.toml
 - fail: invalid/encoding/bad-utf8-in-multiline.toml
@@ -422,33 +406,6 @@ relating to strings and encoding.
 - fail: invalid/integer/leading-zero-sign-1.toml
 - fail: invalid/integer/leading-zero-sign-2.toml
 - fail: invalid/integer/leading-zero-sign-3.toml
-- fail: invalid/local-date/feb-29.toml
-- fail: invalid/local-date/feb-30.toml
-- fail: invalid/local-date/mday-over.toml
-- fail: invalid/local-date/mday-under.toml
-- fail: invalid/local-date/month-over.toml
-- fail: invalid/local-date/month-under.toml
-- fail: invalid/local-date/no-leads.toml
-- fail: invalid/local-date/no-leads-with-milli.toml
-- fail: invalid/local-date/y10k.toml
-- fail: invalid/local-datetime/feb-29.toml
-- fail: invalid/local-datetime/feb-30.toml
-- fail: invalid/local-datetime/hour-over.toml
-- fail: invalid/local-datetime/mday-over.toml
-- fail: invalid/local-datetime/mday-under.toml
-- fail: invalid/local-datetime/minute-over.toml
-- fail: invalid/local-datetime/month-over.toml
-- fail: invalid/local-datetime/month-under.toml
-- fail: invalid/local-datetime/no-leads.toml
-- fail: invalid/local-datetime/no-leads-with-milli.toml
-- fail: invalid/local-datetime/second-over.toml
-- fail: invalid/local-datetime/time-no-leads.toml
-- fail: invalid/local-datetime/y10k.toml
-- fail: invalid/local-time/hour-over.toml
-- fail: invalid/local-time/minute-over.toml
-- fail: invalid/local-time/second-over.toml
-- fail: invalid/local-time/time-no-leads.toml
-- fail: invalid/local-time/time-no-leads-2.toml
 - fail: invalid/spec/inline-table-2-0.toml
 - fail: invalid/spec/table-9-0.toml
 - fail: invalid/spec/table-9-1.toml
@@ -494,7 +451,7 @@ relating to strings and encoding.
 - fail: valid/string/escape-tricky.toml
 - fail: valid/string/multiline-quotes.toml
 - fail: valid/string/raw-multiline.toml
-passing: 424/557
+passing: 467/557
 ```
 
 ## License
