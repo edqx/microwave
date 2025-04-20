@@ -140,8 +140,8 @@ pub fn Parser(ScannerType: type) type {
             std.fmt.ParseIntError ||
             std.fmt.ParseFloatError ||
             ScannerType.Error ||
-            error{ InvalidUtf8, Utf8ExpectedContinuation, Utf8OverlongEncoding, Utf8EncodesSurrogateHalf, Utf8CodepointTooLarge } ||
-            error{ UnexpectedToken, UnexpectedEof, UnexpectedEol, InvalidKeyAccess, DuplicateKey, InvalidDateTime, LeadingZero };
+            error{ InvalidUtf8, Utf8ExpectedContinuation, Utf8OverlongEncoding, Utf8EncodesSurrogateHalf, Utf8CodepointTooLarge, Utf8CannotEncodeSurrogateHalf, CodepointTooLarge } ||
+            error{ UnexpectedToken, UnexpectedEof, UnexpectedEol, InvalidKeyAccess, DuplicateKey, InvalidDateTime, InvalidEscape, LeadingZero };
 
         allocator: std.mem.Allocator,
         scanner: *ScannerType,
@@ -194,10 +194,51 @@ pub fn Parser(ScannerType: type) type {
                 const decoded_codepoint = try std.unicode.utf8Decode(slice);
 
                 if (decoded_codepoint == '\\') {
-                    // handle escapes
+                    if (iter.i >= token_contents.len) return Error.InvalidEscape;
+                    const next_byte = token_contents[iter.i];
+                    iter.i += 1;
+                    var unicode_buf: [4]u8 = undefined;
+                    _ = try writer.writeAll(switch (next_byte) {
+                        '\r', '\n', '\t', ' ' => {
+                            while (true) : (iter.i += 1) {
+                                if (iter.i >= token_contents.len) break;
+                                switch (token_contents[iter.i]) {
+                                    '\r', '\n', '\t', ' ' => continue,
+                                    else => break,
+                                }
+                            }
+                            continue;
+                        },
+                        '"' => "\"",
+                        '\'' => "'",
+                        '\\' => "\\",
+                        'b' => &.{std.ascii.control_code.bs},
+                        't' => "\t",
+                        'n' => "\n",
+                        'f' => &.{std.ascii.control_code.ff},
+                        'r' => "\r",
+                        inline 'u', 'U' => |tag| blk: {
+                            const num_nibbles = switch (tag) {
+                                'u' => 4,
+                                'U' => 8,
+                                else => unreachable,
+                            };
+                            if (token_contents.len < num_nibbles or iter.i >= token_contents.len - (num_nibbles - 1)) return Error.InvalidEscape;
+                            const int = token_contents[iter.i..][0..num_nibbles];
+                            iter.i += num_nibbles;
+                            const parsed_codepoint = std.fmt.parseInt(u21, int, 16) catch return Error.InvalidEscape;
+                            if (!((parsed_codepoint >= 0 and parsed_codepoint <= 0xd7ff) or
+                                (parsed_codepoint >= 0xe000 and parsed_codepoint <= 0x10fff))) return Error.InvalidEscape;
+
+                            const num_bytes_to_write = try std.unicode.utf8Encode(parsed_codepoint, &unicode_buf);
+                            break :blk unicode_buf[0..num_bytes_to_write];
+                        },
+                        else => return Error.InvalidEscape,
+                    });
+                    continue;
                 }
 
-                _ = try writer.write(slice);
+                _ = try writer.writeAll(slice);
             }
 
             const string_contents = try result.toOwnedSlice(self.allocator);
@@ -806,34 +847,13 @@ test Parser {
 
 test "parse test" {
     const res = try fromSlice(std.testing.allocator,
-        \\# Top comment.
-        \\  # Top comment.
-        \\# Top comment.
+        \\        beee = """
+        \\heeee
+        \\geeee\  
         \\
-        \\# [no-extraneous-groups-please]
         \\
-        \\[group] # Comment
-        \\answer = 42 # Comment
-        \\# no-extraneous-keys-please = 999
-        \\# Inbetween comment.
-        \\more = [ # Comment
-        \\  # What about multiple # comments?
-        \\  # Can you handle it?
-        \\  #
-        \\          # Evil.
-        \\# Evil.
-        \\  42, 42, # Comments within arrays are fun.
-        \\  # What about multiple # comments?
-        \\  # Can you handle it?
-        \\  #
-        \\          # Evil.
-        \\# Evil.
-        \\# ] Did I fool you?
-        \\] # Hopefully not.
+        \\      """
         \\
-        \\# Make sure the space between the datetime and "#" isn't lexed.
-        \\dt = 1979-05-27T07:32:12-07:00  # c
-        \\d = 1979-05-27 # Comment
     );
     defer res.deinit();
 }

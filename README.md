@@ -15,9 +15,10 @@ This parser should be spec compliant. (WIP, see [Spec Compliancy](#spec-complian
 ### TODO
 These features are yet to be implemented, and are actively being worked on, in order
 of severity:
-- Parsing string escape codes (\n, \r, \u0000, .etc, see https://toml.io/en/v1.0.0#string)
+- Fix parsing issues related to keys and tables being re-defined
 - Some minor parsing issues, for example sometimes keys and tables can be re-defined
-- Not all literals are checked against the spec (leading zeroes are currently allowed)
+- Literal strings
+- Check integer literals against the spec (leading zeroes are currently allowed)
 
 ## Usage
 
@@ -394,29 +395,7 @@ relating to strings and encoding.
 - fail: invalid/spec/inline-table-2-0.toml
 - fail: invalid/spec/table-9-0.toml
 - fail: invalid/spec/table-9-1.toml
-- fail: invalid/string/bad-byte-escape.toml
-- fail: invalid/string/bad-escape-1.toml
 - fail: invalid/string/bad-escape-2.toml
-- fail: invalid/string/bad-hex-esc-1.toml
-- fail: invalid/string/bad-hex-esc-2.toml
-- fail: invalid/string/bad-hex-esc-3.toml
-- fail: invalid/string/bad-hex-esc-4.toml
-- fail: invalid/string/bad-hex-esc-5.toml
-- fail: invalid/string/bad-slash-escape.toml
-- fail: invalid/string/bad-uni-esc-1.toml
-- fail: invalid/string/bad-uni-esc-2.toml
-- fail: invalid/string/bad-uni-esc-3.toml
-- fail: invalid/string/bad-uni-esc-4.toml
-- fail: invalid/string/bad-uni-esc-5.toml
-- fail: invalid/string/bad-uni-esc-6.toml
-- fail: invalid/string/bad-uni-esc-7.toml
-- fail: invalid/string/basic-multiline-out-of-range-unicode-escape-1.toml
-- fail: invalid/string/basic-multiline-out-of-range-unicode-escape-2.toml
-- fail: invalid/string/basic-multiline-unknown-escape.toml
-- fail: invalid/string/basic-out-of-range-unicode-escape-1.toml
-- fail: invalid/string/basic-out-of-range-unicode-escape-2.toml
-- fail: invalid/string/basic-unknown-escape.toml
-- fail: invalid/string/multiline-bad-escape-1.toml
 - fail: invalid/string/multiline-bad-escape-2.toml
 - fail: invalid/string/multiline-bad-escape-3.toml
 - fail: invalid/string/multiline-escape-space-1.toml
@@ -432,11 +411,17 @@ relating to strings and encoding.
 - fail: valid/key/quoted-unicode.toml
 - fail: valid/spec/string-4.toml
 - fail: valid/spec/string-5.toml
+- fail: valid/spec/string-6.toml
 - fail: valid/spec/string-7.toml
+- fail: valid/string/escape-esc.toml
 - fail: valid/string/escape-tricky.toml
+- fail: valid/string/hex-escape.toml
 - fail: valid/string/multiline-quotes.toml
+- fail: valid/string/nl.toml
+- fail: valid/string/quoted-unicode.toml
+- fail: valid/string/raw.toml
 - fail: valid/string/raw-multiline.toml
-passing: 480/557
+passing: 496/557
 ```
 
 ## License
