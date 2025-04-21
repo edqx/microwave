@@ -15,7 +15,7 @@ This parser should be spec compliant. (WIP, see [Spec Compliancy](#spec-complian
 ### TODO
 These features are yet to be implemented, and are actively being worked on, in order
 of severity:
-- Check files for invalid control sequences and characters 
+- Check files for invalid control sequences and characters
 - Fix parsing issues related to keys and tables being re-defined
 - Check integer literals against the spec (leading zeroes are currently allowed)
 
@@ -355,8 +355,10 @@ Not sure.
 
 ## Spec Compliancy
 See the [tests](https://github.com/edqx/microwave/tree/master/tests) folder to check
-Microwave against the various official TOML test cases. Most are false positives
-relating to strings and encoding.
+Microwave against the various official TOML test cases.
+
+All failed tests are false positives, which means Microwave can read all valid TOML
+files, but can also read many invalid ones too.
 
 ```
 - fail: invalid/control/bare-cr.toml
@@ -404,11 +406,7 @@ relating to strings and encoding.
 - fail: invalid/table/redefine-2.toml
 - fail: invalid/table/redefine-3.toml
 - fail: invalid/table/super-twice.toml
-- fail: valid/spec/string-4.toml
-- fail: valid/spec/string-7.toml
-- fail: valid/string/multiline-quotes.toml
-- fail: valid/string/raw-multiline.toml
-passing: 508/557
+passing: 512/557
 ```
 
 ## License

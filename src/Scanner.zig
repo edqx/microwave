@@ -333,6 +333,10 @@ fn consumeSlice(self: *Scanner, slice: []const u8) !?Token.Range {
     };
 }
 
+fn consumeChar(self: *Scanner, char: u8) !?Token.Range {
+    return try self.consumeSlice(&.{char});
+}
+
 fn consumeNewline(self: *Scanner) !?Token.Range {
     if (try self.consumeSlice("\r\n")) |range| {
         self.offset -= 2;
@@ -360,37 +364,59 @@ fn consumeCommentLine(self: *Scanner) !?Token.Range {
     return try self.consumeUntilNewline(isAnyChar) orelse return self.consumeNone();
 }
 
-fn consumeString(self: *Scanner, kind: StringKind) !?struct { literal_string: bool, contents_range: Token.Range } {
-    const end_delimeter: []const u8 = switch (kind) {
-        .single_line => if (try self.consumeSingle(isStringChar)) |range| self.rangeContents(range) else return null,
-        .multiple_lines => if (try self.consumeSlice("\"\"\"")) |range|
-            self.rangeContents(range)
-        else if (try self.consumeSlice("'''")) |range|
-            self.rangeContents(range)
-        else
-            return null,
-    };
+const ConsumedString = struct { literal_string: bool, contents_range: Token.Range };
 
-    const is_literal_string = end_delimeter[0] == '\'';
+fn consumeSingleLineString(self: *Scanner) !?ConsumedString {
+    inline for (.{ '\"', '\'' }) |char| {
+        if (try self.consumeChar(char) != null) {
+            const is_literal_string = char == '\'';
 
-    var escape = false;
-    var range = self.consumeNone();
-    while (true) {
-        switch (kind) {
-            .single_line => {
+            var escape = false;
+            var range = self.consumeNone();
+            while (true) {
                 if (isControlSingleLine(try self.peekSingle())) return Error.UnexpectedByte;
-            },
-            .multiple_lines => {
-                if (isControlMultiline(try self.peekSingle())) return Error.UnexpectedByte;
-            },
+                if (!escape and try self.consumeChar(char) != null) {
+                    return .{ .literal_string = is_literal_string, .contents_range = range };
+                }
+                escape = !is_literal_string and !escape and isStringEscapeChar(try self.peekSingle());
+                range = range.expand(try self.consumeAnySingle());
+            }
         }
-        if (!escape and try self.consumeSlice(end_delimeter) != null) {
-            return .{ .literal_string = is_literal_string, .contents_range = range };
-        }
-        escape = !is_literal_string and !escape and isStringEscapeChar(try self.peekSingle());
-        range = range.expand(try self.consumeAnySingle());
     }
-    unreachable;
+    return null;
+}
+
+fn consumeMultilineString(self: *Scanner) !?ConsumedString {
+    inline for (.{ '\"', '\'' }) |char| {
+        if (try self.consumeSlice(&[_]u8{char} ** 3) != null) {
+            const is_literal_string = char == '\'';
+
+            var escape = false;
+            var range = self.consumeNone();
+            while (true) {
+                if (isControlMultiline(try self.peekSingle())) return Error.UnexpectedByte;
+                // this isn't the most readable code, but it's important to allow
+                // multi-line string constructions such as
+                // '''
+                // this '' string has not
+                // ''ended'''''
+                // which includes the two quotes even at the end, before the three to close.
+                // if we just checked the three to close, it would not be read correctly.
+                // https://toml.io/en/v1.0.0#string
+                if (!escape and try self.consumeSlice(&[_]u8{char} ** 3) != null) {
+                    if (try self.consumeSlice(&[_]u8{char} ** 2) != null) {
+                        range.end += 2;
+                    } else if (try self.consumeChar(char) != null) {
+                        range.end += 1;
+                    }
+                    return .{ .literal_string = is_literal_string, .contents_range = range };
+                }
+                escape = !is_literal_string and !escape and isStringEscapeChar(try self.peekSingle());
+                range = range.expand(try self.consumeAnySingle());
+            }
+        }
+    }
+    return null;
 }
 
 fn consumeDigitGroups(self: *Scanner, digit_predicate: fn (b: u8) bool) !?Token.Range {
@@ -532,7 +558,7 @@ fn consumeValueToken(self: *Scanner) !?Token {
         self.offset = restore_pos;
     }
     if (try self.consumeNumberLiteralToken()) |number_token| return number_token;
-    if (try self.consumeString(.multiple_lines) orelse try self.consumeString(.single_line)) |string_info| {
+    if (try self.consumeMultilineString() orelse try self.consumeSingleLineString()) |string_info| {
         return string_info.contents_range.token(if (string_info.literal_string) .literal_literal_string else .literal_string);
     }
     if (try self.consumeSlice("true") orelse try self.consumeSlice("false")) |range| return range.token(.literal_bool);
@@ -555,7 +581,7 @@ pub fn next(self: *Scanner) !?Token {
     switch (self.state) {
         inline .root, .table_key, .inline_key => |inner_state| {
             if (try self.consumeSingle(isAccessChar)) |range| return range.token(.access);
-            if (try self.consumeString(.single_line)) |string_range| {
+            if (try self.consumeSingleLineString()) |string_range| {
                 return string_range.contents_range.token(if (string_range.literal_string) .key else .string_key);
             }
             if (try self.consumeMany(isKeyChar)) |range| return range.token(.key);
