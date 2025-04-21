@@ -207,15 +207,15 @@ pub fn Stream(WriterT: type, comptime options: Options) type {
         }
 
         fn writeDate(self: *WriteStreamT, date: parse.Value.DateTime.Date) !void {
-            try self.underlying_writer.print("{d}-{d}-{d}", .{ date.year, date.month, date.day });
+            try self.underlying_writer.print("{d:0>4}-{d:0>2}-{d:0>2}", .{ date.year, date.month, date.day });
         }
 
         fn writeTime(self: *WriteStreamT, time: parse.Value.DateTime.Time) !void {
-            try self.underlying_writer.print("{d}:{d}", .{ time.hour, time.minute });
+            try self.underlying_writer.print("{d:0>2}:{d:0>2}", .{ time.hour, time.minute });
             if (time.second) |second| {
-                try self.underlying_writer.print(":{d}", .{second});
+                try self.underlying_writer.print(":{d:0>2}", .{second});
                 if (time.millisecond) |millisecond| {
-                    try self.underlying_writer.print(".{d}", .{millisecond});
+                    try self.underlying_writer.print(".{d:0<3}", .{millisecond});
                 }
             }
         }
@@ -249,7 +249,11 @@ pub fn Stream(WriterT: type, comptime options: Options) type {
                     if (all.offset.isUtc()) {
                         try self.underlying_writer.writeAll("Z");
                     } else {
-                        try self.underlying_writer.print("{d}:{d}", .{ all.offset.hour, all.offset.minute });
+                        try self.underlying_writer.print("{s}{d:0>2}:{d:0>2}", .{
+                            if (all.offset.negative) "-" else "+",
+                            all.offset.hour,
+                            all.offset.minute,
+                        });
                     }
                 },
             }

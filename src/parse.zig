@@ -13,7 +13,7 @@ pub const Value = union(enum) {
         pub const Day = std.math.IntFittingRange(1, 31);
 
         pub const Hour = std.math.IntFittingRange(0, 23);
-        pub const OffsetHour = std.math.IntFittingRange(-24, 24);
+        pub const OffsetHour = std.math.IntFittingRange(0, 24);
         pub const Minute = std.math.IntFittingRange(0, 59);
         pub const Second = std.math.IntFittingRange(0, 59);
         pub const Millisecond = u64;
@@ -25,6 +25,7 @@ pub const Value = union(enum) {
         };
 
         pub const Offset = struct {
+            negative: bool,
             hour: OffsetHour,
             minute: Minute,
 
@@ -193,8 +194,17 @@ pub fn Parser(ScannerType: type) type {
             return self.current_token == null;
         }
 
+        fn trimInitialNewlineFromString(token_contents: []const u8) []const u8 {
+            if (token_contents.len > 0) {
+                if (token_contents[0] == '\n') return token_contents[1..];
+                if (token_contents[0] == '\r' and token_contents[1] == '\n') return token_contents[2..];
+            }
+
+            return token_contents;
+        }
+
         pub fn parseLiteralStringValueAlloc(self: ParserT, token_contents: []const u8) !Value {
-            const string_contents = try self.allocator.dupe(u8, token_contents);
+            const string_contents = try self.allocator.dupe(u8, trimInitialNewlineFromString(token_contents));
             errdefer self.allocator.free(string_contents);
             return .{ .string = string_contents };
         }
@@ -205,23 +215,25 @@ pub fn Parser(ScannerType: type) type {
 
             var writer = result.writer(self.allocator);
 
-            const codepoints = try std.unicode.Utf8View.init(token_contents);
+            const trimmed_contents = trimInitialNewlineFromString(token_contents);
+
+            const codepoints = try std.unicode.Utf8View.init(trimmed_contents);
             var iter = codepoints.iterator();
 
             while (iter.nextCodepointSlice()) |slice| {
                 const decoded_codepoint = try std.unicode.utf8Decode(slice);
 
                 if (decoded_codepoint == '\\') {
-                    if (iter.i >= token_contents.len) return Error.InvalidEscape;
-                    const next_byte = token_contents[iter.i];
+                    if (iter.i >= trimmed_contents.len) return Error.InvalidEscape;
+                    const next_byte = trimmed_contents[iter.i];
                     iter.i += 1;
                     var unicode_buf: [4]u8 = undefined;
                     _ = try writer.writeAll(switch (next_byte) {
                         '\r', '\n', '\t', ' ' => |tag| {
                             var encounted_newline = tag == '\r' or tag == '\n';
                             while (true) : (iter.i += 1) {
-                                if (iter.i >= token_contents.len) break;
-                                switch (token_contents[iter.i]) {
+                                if (iter.i >= trimmed_contents.len) break;
+                                switch (trimmed_contents[iter.i]) {
                                     '\n' => {
                                         encounted_newline = true;
                                         continue;
@@ -251,8 +263,8 @@ pub fn Parser(ScannerType: type) type {
                                 'U' => 8,
                                 else => unreachable,
                             };
-                            if (token_contents.len < num_nibbles or iter.i >= token_contents.len - (num_nibbles - 1)) return Error.InvalidEscape;
-                            const int = token_contents[iter.i..][0..num_nibbles];
+                            if (trimmed_contents.len < num_nibbles or iter.i >= trimmed_contents.len - (num_nibbles - 1)) return Error.InvalidEscape;
+                            const int = trimmed_contents[iter.i..][0..num_nibbles];
                             iter.i += num_nibbles;
                             const parsed_codepoint = std.fmt.parseInt(u21, int, 16) catch return Error.InvalidEscape;
                             if (std.unicode.isSurrogateCodepoint(parsed_codepoint)) return Error.InvalidEscape;
@@ -311,13 +323,15 @@ pub fn Parser(ScannerType: type) type {
             return .{ .float = float };
         }
 
-        pub fn parseInfValue(self: ParserT) !Value {
+        pub fn parseInfValue(self: ParserT, token_contents: []const u8) !Value {
             _ = self;
-            return .{ .float = std.math.inf(f64) };
+            const negative = token_contents[0] == '-';
+            return .{ .float = if (negative) -std.math.inf(f64) else std.math.inf(f64) };
         }
 
-        pub fn parseNanValue(self: ParserT) !Value {
+        pub fn parseNanValue(self: ParserT, token_contents: []const u8) !Value {
             _ = self;
+            _ = token_contents;
             return .{ .float = std.math.nan(f64) };
         }
 
@@ -343,10 +357,14 @@ pub fn Parser(ScannerType: type) type {
             const local_date_time = try self.parseLocalDateTimeValue(datetime_contents);
 
             const offset: Value.DateTime.Offset = if (offset_contents.len == 1 and (offset_contents[0] == 'Z' or offset_contents[0] == 'z')) .{
+                .negative = false,
                 .hour = 0,
                 .minute = 0,
             } else parse_offset: {
-                var time_parts = std.mem.tokenizeAny(u8, offset_contents, ":");
+                const sign = offset_contents[0];
+                std.debug.assert(sign == '+' or sign == '-');
+
+                var time_parts = std.mem.tokenizeAny(u8, offset_contents[1..], ":");
 
                 const hour_part = time_parts.next().?;
                 if (hour_part.len < 2) return Error.InvalidDateTime;
@@ -354,9 +372,11 @@ pub fn Parser(ScannerType: type) type {
                 if (minute_part.len < 2) return Error.InvalidDateTime;
 
                 var offset: Value.DateTime.Offset = .{
+                    .negative = false,
                     .hour = 0,
                     .minute = 0,
                 };
+                offset.negative = sign == '-';
                 offset.hour = std.fmt.parseInt(Value.DateTime.OffsetHour, hour_part, 10) catch return Error.InvalidDateTime;
                 if (offset.hour <= -24 or offset.hour >= 24) return Error.InvalidDateTime;
                 offset.minute = std.fmt.parseInt(Value.DateTime.Minute, minute_part, 10) catch return Error.InvalidDateTime;
@@ -649,8 +669,8 @@ pub fn Parser(ScannerType: type) type {
                 .literal_base_integer => try self.parseBaseIntegerValue(token_contents),
                 .literal_integer => try self.parseIntegerValue(token_contents),
                 .literal_float => try self.parseFloatValue(token_contents),
-                .literal_inf => try self.parseInfValue(),
-                .literal_nan => try self.parseNanValue(),
+                .literal_inf => try self.parseInfValue(token_contents),
+                .literal_nan => try self.parseNanValue(token_contents),
                 .literal_bool => try self.parseBoolValue(token_contents),
                 .literal_offset_date_time => try self.parseOffsetDateTimeValue(token_contents),
                 .literal_local_date_time => try self.parseLocalDateTimeValue(token_contents),
