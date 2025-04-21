@@ -11,6 +11,7 @@ pub const Token = struct {
         newline,
         delimeter,
         key,
+        string_key,
         access,
         equals,
         table_start,
@@ -79,6 +80,11 @@ buffer: []const u8,
 can_request_more: bool = false,
 state: State = .root,
 offset: usize = 0,
+
+fn isAnyChar(b: u8) bool {
+    _ = b;
+    return true;
+}
 
 fn isCommentChar(b: u8) bool {
     return b == '#';
@@ -229,19 +235,16 @@ fn isSpaceChar(b: u8) bool {
     };
 }
 
-fn isNewlineChar(b: u8) bool {
+fn isWhitespaceChar(b: u8) bool {
     return switch (b) {
-        '\r', '\n' => true,
+        // see std.ascii.whitespace
+        ' ', '\n', '\r', '\t', std.ascii.control_code.vt, std.ascii.control_code.ff => true,
         else => false,
     };
 }
 
-fn isWhitespaceChar(b: u8) bool {
-    return isSpaceChar(b) or isNewlineChar(b);
-}
-
-fn isNotNewlineChar(b: u8) bool {
-    return !isNewlineChar(b);
+fn isNewlineChar(b: u8) bool {
+    return b == '\n';
 }
 
 fn isNotWhitespaceChar(b: u8) bool {
@@ -330,9 +333,31 @@ fn consumeSlice(self: *Scanner, slice: []const u8) !?Token.Range {
     };
 }
 
+fn consumeNewline(self: *Scanner) !?Token.Range {
+    if (try self.consumeSlice("\r\n")) |range| {
+        self.offset -= 2;
+        return range;
+    }
+    if (try self.consumeSingle(isNewlineChar)) |range| {
+        self.offset -= 1;
+        return range;
+    }
+    return null;
+}
+
+fn consumeUntilNewline(self: *Scanner, predicate: fn (char: u8) bool) !?Token.Range {
+    if (try self.consumeNewline() != null) return null;
+    var range: Token.Range = try self.consumeSingle(predicate) orelse return null;
+    while (try self.consumeNewline() == null) {
+        const further_range = try self.consumeSingle(predicate) orelse break;
+        range = range.expand(further_range);
+    }
+    return range;
+}
+
 fn consumeCommentLine(self: *Scanner) !?Token.Range {
     if (try self.consumeSingle(isCommentChar) == null) return null;
-    return try self.consumeMany(isNotNewlineChar) orelse return self.consumeNone();
+    return try self.consumeUntilNewline(isAnyChar) orelse return self.consumeNone();
 }
 
 fn consumeString(self: *Scanner, kind: StringKind) !?struct { literal_string: bool, contents_range: Token.Range } {
@@ -359,8 +384,10 @@ fn consumeString(self: *Scanner, kind: StringKind) !?struct { literal_string: bo
                 if (isControlMultiline(try self.peekSingle())) return Error.UnexpectedByte;
             },
         }
-        if (!escape and try self.consumeSlice(end_delimeter) != null) return .{ .literal_string = is_literal_string, .contents_range = range };
-        escape = !escape and isStringEscapeChar(try self.peekSingle());
+        if (!escape and try self.consumeSlice(end_delimeter) != null) {
+            return .{ .literal_string = is_literal_string, .contents_range = range };
+        }
+        escape = !is_literal_string and !escape and isStringEscapeChar(try self.peekSingle());
         range = range.expand(try self.consumeAnySingle());
     }
     unreachable;
@@ -518,14 +545,19 @@ pub fn next(self: *Scanner) !?Token {
     errdefer self.offset = original_pos;
 
     if (try self.consumeMany(isSpaceChar)) |range| return range.token(.whitespace);
-    if (try self.consumeMany(isWhitespaceChar)) |range| return range.token(.newline);
+    if (try self.consumeSlice("\r\n") orelse try self.consumeSingle(isNewlineChar)) |range| {
+        const more_whitespace = try self.consumeMany(isWhitespaceChar) orelse return range.token(.newline);
+        return range.expand(more_whitespace).token(.newline);
+    }
 
     if (try self.consumeCommentLine()) |range| return range.token(.comment);
 
     switch (self.state) {
         inline .root, .table_key, .inline_key => |inner_state| {
             if (try self.consumeSingle(isAccessChar)) |range| return range.token(.access);
-            if (try self.consumeString(.single_line)) |string_range| return string_range.contents_range.token(.key);
+            if (try self.consumeString(.single_line)) |string_range| {
+                return string_range.contents_range.token(if (string_range.literal_string) .key else .string_key);
+            }
             if (try self.consumeMany(isKeyChar)) |range| return range.token(.key);
             switch (inner_state) {
                 .root => {

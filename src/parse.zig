@@ -165,12 +165,24 @@ pub fn Parser(ScannerType: type) type {
 
         pub fn consumeToken(self: *ParserT, token_kind: Scanner.Token.Kind) !?Scanner.Token {
             try self.consumeWhitespace();
-            if (token_kind == .newline) {
-                if (try self.consumeToken(.comment) != null) try self.nextToken();
-            }
             const next_token = self.current_token orelse return null;
             if (next_token.kind != token_kind) return null;
             return next_token;
+        }
+
+        pub fn checkComment(self: ParserT, contents: []const u8) !Value {
+            _ = self;
+            _ = contents;
+        }
+
+        pub fn consumeAndCheckComment(self: *ParserT) !?Scanner.Token {
+            return try self.consumeToken(.comment);
+        }
+
+        pub fn consumeCommentsAndNewlines(self: *ParserT) !void {
+            while (try self.consumeToken(.newline) orelse try self.consumeAndCheckComment()) |_| {
+                try self.nextToken();
+            }
         }
 
         pub fn expectToken(self: *ParserT, token_kind: Scanner.Token.Kind) !void {
@@ -187,7 +199,7 @@ pub fn Parser(ScannerType: type) type {
             return .{ .string = string_contents };
         }
 
-        pub fn parseStringValueAlloc(self: ParserT, token_contents: []const u8) !Value {
+        fn parseEscapedStringAlloc(self: ParserT, token_contents: []const u8) ![]const u8 {
             var result: std.ArrayListUnmanaged(u8) = try .initCapacity(self.allocator, token_contents.len);
             defer result.deinit(self.allocator);
 
@@ -231,6 +243,7 @@ pub fn Parser(ScannerType: type) type {
                         'n' => "\n",
                         'f' => &.{std.ascii.control_code.ff},
                         'r' => "\r",
+                        'e' => &.{std.ascii.control_code.esc},
                         inline 'x', 'u', 'U' => |tag| blk: {
                             const num_nibbles = switch (tag) {
                                 'x' => 2,
@@ -242,8 +255,9 @@ pub fn Parser(ScannerType: type) type {
                             const int = token_contents[iter.i..][0..num_nibbles];
                             iter.i += num_nibbles;
                             const parsed_codepoint = std.fmt.parseInt(u21, int, 16) catch return Error.InvalidEscape;
-                            if (!((parsed_codepoint >= 0 and parsed_codepoint <= 0xd7ff) or
-                                (parsed_codepoint >= 0xe000 and parsed_codepoint <= 0x10fff))) return Error.InvalidEscape;
+                            if (std.unicode.isSurrogateCodepoint(parsed_codepoint)) return Error.InvalidEscape;
+                            // if (!((parsed_codepoint >= 0 and parsed_codepoint <= 0xd7ff) or
+                            //     (parsed_codepoint >= 0xe000 and parsed_codepoint <= 0x10fff))) return Error.InvalidEscape;
 
                             const num_bytes_to_write = try std.unicode.utf8Encode(parsed_codepoint, &unicode_buf);
                             break :blk unicode_buf[0..num_bytes_to_write];
@@ -257,6 +271,12 @@ pub fn Parser(ScannerType: type) type {
             }
 
             const string_contents = try result.toOwnedSlice(self.allocator);
+            errdefer self.allocator.free(string_contents);
+            return string_contents;
+        }
+
+        pub fn parseStringValueAlloc(self: ParserT, token_contents: []const u8) !Value {
+            const string_contents = try self.parseEscapedStringAlloc(token_contents);
             errdefer self.allocator.free(string_contents);
             return .{ .string = string_contents };
         }
@@ -467,9 +487,15 @@ pub fn Parser(ScannerType: type) type {
         };
 
         pub fn consumeTableAccessGetValuePtr(self: *ParserT, table: *Value.Table, mode: AccessMode, expect_end_token_kind: Scanner.Token.Kind) !?AccessEntry {
-            const first_key_token = try self.consumeToken(.key) orelse return null;
+            const first_key_token = try self.consumeToken(.key) orelse try self.consumeToken(.string_key) orelse return null;
             try self.nextToken();
-            const key_contents = self.scanner.tokenContents(first_key_token);
+            const token_contents = self.scanner.tokenContents(first_key_token);
+            const key_contents = switch (first_key_token.kind) {
+                .key => token_contents,
+                .string_key => try self.parseEscapedStringAlloc(token_contents),
+                else => unreachable,
+            };
+            errdefer if (first_key_token.kind == .string_key) self.allocator.free(key_contents);
 
             if (try self.consumeToken(expect_end_token_kind) != null) {
                 const last_value = try table.getOrPut(self.allocator, key_contents);
@@ -520,9 +546,7 @@ pub fn Parser(ScannerType: type) type {
             var array_value: Value = .{ .array = .empty };
             errdefer array_value.deinitRecursive(self.allocator);
 
-            while (try self.consumeToken(.newline) != null) {
-                try self.nextToken();
-            }
+            try self.consumeCommentsAndNewlines();
             if (try self.consumeToken(.array_end) != null) {
                 return array_value;
             }
@@ -537,14 +561,14 @@ pub fn Parser(ScannerType: type) type {
                 try array_value.array.append(self.allocator, element);
                 errdefer _ = array_value.array.pop();
 
-                while (try self.consumeToken(.newline) != null) try self.nextToken();
+                try self.consumeCommentsAndNewlines();
                 if (try self.consumeToken(.delimeter) == null) {
-                    while (try self.consumeToken(.newline) != null) try self.nextToken();
+                    try self.consumeCommentsAndNewlines();
                     try self.expectToken(.array_end);
                     break;
                 }
                 try self.nextToken();
-                while (try self.consumeToken(.newline) != null) try self.nextToken();
+                try self.consumeCommentsAndNewlines();
                 if (try self.consumeToken(.array_end) != null) break;
             }
 
@@ -559,7 +583,7 @@ pub fn Parser(ScannerType: type) type {
             var table_value: Value = .{ .table = .empty };
             errdefer table_value.deinitRecursive(self.allocator);
 
-            while (try self.consumeToken(.newline) != null) try self.nextToken();
+            try self.consumeCommentsAndNewlines();
             if (try self.consumeToken(.inline_table_end) != null) {
                 return table_value;
             }
@@ -581,14 +605,14 @@ pub fn Parser(ScannerType: type) type {
                 errdefer table_entry.value_ptr.deinitRecursive(self.allocator);
                 try self.nextToken();
 
-                while (try self.consumeToken(.newline) != null) try self.nextToken();
+                try self.consumeCommentsAndNewlines();
                 if (try self.consumeToken(.delimeter) == null) {
-                    while (try self.consumeToken(.newline) != null) try self.nextToken();
+                    try self.consumeCommentsAndNewlines();
                     try self.expectToken(.inline_table_end);
                     break;
                 }
                 try self.nextToken();
-                while (try self.consumeToken(.newline) != null) try self.nextToken();
+                try self.consumeCommentsAndNewlines();
                 if (try self.consumeToken(.inline_table_end) != null) break;
             }
 
@@ -602,6 +626,7 @@ pub fn Parser(ScannerType: type) type {
             const value = switch (self.current_token.?.kind) {
                 .whitespace,
                 .key,
+                .string_key,
                 .access,
                 .equals,
                 .table_start,
@@ -649,6 +674,7 @@ pub fn Parser(ScannerType: type) type {
                 if (self.isEof()) break;
 
                 if (i > 0) {
+                    if (try self.consumeToken(.comment) != null) try self.nextToken();
                     self.expectToken(.newline) catch |e| switch (e) {
                         Error.UnexpectedToken => if (self.isEof()) break else return e,
                         else => return e,
@@ -656,7 +682,7 @@ pub fn Parser(ScannerType: type) type {
                     try self.nextToken();
                 }
 
-                while (try self.consumeToken(.newline) != null) try self.nextToken();
+                try self.consumeCommentsAndNewlines();
                 if (self.isEof()) break;
 
                 if (try self.consumeTableAccessGetValuePtr(active_table, .inline_table, .equals)) |table_entry| {
@@ -863,12 +889,13 @@ test Parser {
 
 test "parse test" {
     const res = try fromSlice(std.testing.allocator,
-        \\        beee = """
-        \\heeee
-        \\geeee\  
+        \\        
+        \\"\u0000" = "null"
+        \\'\u0000' = "different key"
+        \\"\u0008 \u000c \U00000041 \u007f \u0080 \u00ff \ud7ff \ue000 \uffff \U00010000 \U0010ffff" = "escaped key"
         \\
-        \\
-        \\      """
+        \\"~  ÿ ퟿    𐀀 􏿿" = "basic key"
+        \\'l ~  ÿ ퟿    𐀀 􏿿' = "literal key"
         \\
     );
     defer res.deinit();

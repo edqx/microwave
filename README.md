@@ -15,9 +15,8 @@ This parser should be spec compliant. (WIP, see [Spec Compliancy](#spec-complian
 ### TODO
 These features are yet to be implemented, and are actively being worked on, in order
 of severity:
+- Check files for invalid control sequences and characters 
 - Fix parsing issues related to keys and tables being re-defined
-- Some minor parsing issues, for example sometimes keys and tables can be re-defined
-- Literal strings
 - Check integer literals against the spec (leading zeroes are currently allowed)
 
 ## Usage
@@ -405,16 +404,11 @@ relating to strings and encoding.
 - fail: invalid/table/redefine-2.toml
 - fail: invalid/table/redefine-3.toml
 - fail: invalid/table/super-twice.toml
-- fail: valid/key/quoted-unicode.toml
 - fail: valid/spec/string-4.toml
-- fail: valid/spec/string-5.toml
 - fail: valid/spec/string-7.toml
-- fail: valid/string/escape-esc.toml
-- fail: valid/string/escape-tricky.toml
 - fail: valid/string/multiline-quotes.toml
-- fail: valid/string/quoted-unicode.toml
 - fail: valid/string/raw-multiline.toml
-passing: 503/557
+passing: 508/557
 ```
 
 ## License
