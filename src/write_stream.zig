@@ -177,7 +177,7 @@ pub fn Stream(WriterT: type, comptime options: Options) type {
         pub fn writeMultilineString(self: *WriteStreamT, string: []const u8) !void {
             self.assertCanWriteValue();
             try self.writeDelimeter();
-            try self.underlying_writer.writeAll("\"\"\"");
+            try self.underlying_writer.writeAll("\"\"\"\n");
             try self.writeStringRaw(string, true);
             try self.underlying_writer.writeAll("\"\"\"");
             self.finishValue();
