@@ -2,10 +2,11 @@
 
 A TOML parser for [Zig](https://ziglang.org).
 
-This parser should be spec compliant. (WIP, see [Spec Compliancy](#spec-compliancy))
+This parser should be spec compliant.
 
 ## Features
-- [x] Parse all spec-compliant TOML documents. (WIP)
+- [x] Parse all spec-compliant TOML documents.
+    - WIP: parses all valid TOML files, but also parses some invalid ones, see [Spec Compliancy](#spec-compliancy)
 - [x] Use Zig readers and writers
 - [x] Populate structs
 - [x] Populate dynamic values
