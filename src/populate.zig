@@ -75,7 +75,7 @@ pub fn Populate(Container: type) type {
                         }
                     };
                     inline for (type_info.@"struct".fields) |field| {
-                        const child_value = table_value.get(field.name) orelse {
+                        const child_value = table_value.keys.get(field.name) orelse {
                             if (@typeInfo(field.type) == .optional) {
                                 @field(destination, field.name) = null;
                                 continue;
@@ -138,13 +138,13 @@ pub fn Populate(Container: type) type {
 
         pub fn intoFromSliceOwned(allocator: std.mem.Allocator, destination: *Container, slice: []const u8) !void {
             var table = try parse.fromSliceOwned(allocator, slice);
-            defer table.deinit(allocator);
+            defer parse.deinitTable(allocator, &table);
             try intoFromTableOwned(allocator, destination, table);
         }
 
         pub fn intoFromReaderOwned(allocator: std.mem.Allocator, destination: *Container, reader: anytype) !void {
             var table = try parse.fromReaderOwned(allocator, reader);
-            defer table.deinit(allocator);
+            defer parse.deinitTable(allocator, &table);
             try intoFromTableOwned(allocator, destination, table);
         }
 

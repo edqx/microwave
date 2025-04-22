@@ -1,5 +1,5 @@
 const std = @import("std");
-const parse = @import("parse.zig");
+const DateTime = @import("parse.zig").Value.DateTime;
 
 pub fn isBareKey(key_name: []const u8) bool {
     for (key_name) |char| {
@@ -206,11 +206,11 @@ pub fn Stream(WriterT: type, comptime options: Options) type {
             self.finishValue();
         }
 
-        fn writeDate(self: *WriteStreamT, date: parse.Value.DateTime.Date) !void {
+        fn writeDate(self: *WriteStreamT, date: DateTime.Date) !void {
             try self.underlying_writer.print("{d:0>4}-{d:0>2}-{d:0>2}", .{ date.year, date.month, date.day });
         }
 
-        fn writeTime(self: *WriteStreamT, time: parse.Value.DateTime.Time) !void {
+        fn writeTime(self: *WriteStreamT, time: DateTime.Time) !void {
             try self.underlying_writer.print("{d:0>2}:{d:0>2}", .{ time.hour, time.minute });
             if (time.second) |second| {
                 try self.underlying_writer.print(":{d:0>2}", .{second});
@@ -227,7 +227,7 @@ pub fn Stream(WriterT: type, comptime options: Options) type {
             });
         }
 
-        pub fn writeDateTime(self: *WriteStreamT, date_time: parse.Value.DateTime) !void {
+        pub fn writeDateTime(self: *WriteStreamT, date_time: DateTime) !void {
             self.assertCanWriteValue();
             try self.writeDelimeter();
             switch (date_time) {

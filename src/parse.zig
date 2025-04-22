@@ -3,7 +3,11 @@ const std = @import("std");
 const Scanner = @import("Scanner.zig");
 
 pub const Value = union(enum) {
-    pub const Table = std.StringArrayHashMapUnmanaged(Value);
+    pub const Table = struct {
+        explicit: bool,
+        keys: std.StringArrayHashMapUnmanaged(Value),
+    };
+
     pub const Array = std.ArrayListUnmanaged(Value);
     pub const ArrayOfTables = std.ArrayListUnmanaged(Table);
 
@@ -68,13 +72,13 @@ pub const Value = union(enum) {
         return blk: switch (self) {
             .none => .none,
             .table => |table_value| {
-                var result: Value = .{ .table = .empty };
+                var result: Value = .{ .table = .{ .explicit = table_value.explicit, .keys = .empty } };
                 errdefer result.deinitRecursive(allocator);
-                var entries = table_value.iterator();
+                var entries = table_value.keys.iterator();
                 while (entries.next()) |entry| {
                     var duped = try entry.value_ptr.dupeRecursive(allocator);
                     errdefer duped.deinitRecursive(allocator);
-                    try result.table.put(allocator, entry.key_ptr.*, duped);
+                    try result.table.keys.put(allocator, entry.key_ptr.*, duped);
                 }
                 break :blk result;
             },
@@ -116,8 +120,7 @@ pub const Value = union(enum) {
             },
             .array_of_tables => |*array_value| {
                 for (array_value.items) |*table_value| {
-                    for (table_value.values()) |*item_ptr| item_ptr.deinitRecursive(allocator);
-                    table_value.deinit(allocator);
+                    deinitTable(allocator, table_value);
                 }
                 array_value.deinit(allocator);
             },
@@ -129,8 +132,8 @@ pub const Value = union(enum) {
 };
 
 pub fn deinitTable(allocator: std.mem.Allocator, table_value: *Value.Table) void {
-    for (table_value.values()) |*item_ptr| item_ptr.deinitRecursive(allocator);
-    table_value.deinit(allocator);
+    for (table_value.keys.values()) |*item_ptr| item_ptr.deinitRecursive(allocator);
+    table_value.keys.deinit(allocator);
 }
 
 pub fn Parser(ScannerType: type) type {
@@ -502,7 +505,7 @@ pub fn Parser(ScannerType: type) type {
             value_ptr: *Value,
 
             pub fn remove(self: AccessEntry) void {
-                std.debug.assert(self.parent_table.orderedRemove(self.key_contents));
+                std.debug.assert(self.parent_table.keys.orderedRemove(self.key_contents));
             }
         };
 
@@ -518,7 +521,7 @@ pub fn Parser(ScannerType: type) type {
             errdefer if (first_key_token.kind == .string_key) self.allocator.free(key_contents);
 
             if (try self.consumeToken(expect_end_token_kind) != null) {
-                const last_value = try table.getOrPut(self.allocator, key_contents);
+                const last_value = try table.keys.getOrPut(self.allocator, key_contents);
                 if (!last_value.found_existing) last_value.value_ptr.* = .none;
                 return .{
                     .parent_table = table,
@@ -529,7 +532,7 @@ pub fn Parser(ScannerType: type) type {
 
             if (try self.consumeToken(.access) != null) {
                 try self.nextToken();
-                const sub_table = try table.getOrPut(self.allocator, key_contents);
+                const sub_table = try table.keys.getOrPut(self.allocator, key_contents);
 
                 if (sub_table.found_existing) {
                     switch (mode) {
@@ -549,8 +552,8 @@ pub fn Parser(ScannerType: type) type {
                         },
                     }
                 } else {
-                    sub_table.value_ptr.* = .{ .table = .empty };
-                    errdefer _ = table.orderedRemove(key_contents);
+                    sub_table.value_ptr.* = .{ .table = .{ .explicit = false, .keys = .empty } };
+                    errdefer _ = table.keys.orderedRemove(key_contents);
                     return try self.consumeTableAccessGetValuePtr(&sub_table.value_ptr.table, mode, expect_end_token_kind);
                 }
             }
@@ -600,7 +603,7 @@ pub fn Parser(ScannerType: type) type {
             self.scanner.setState(.inline_key);
             try self.nextToken();
 
-            var table_value: Value = .{ .table = .empty };
+            var table_value: Value = .{ .table = .{ .explicit = true, .keys = .empty } };
             errdefer table_value.deinitRecursive(self.allocator);
 
             try self.consumeCommentsAndNewlines();
@@ -681,10 +684,10 @@ pub fn Parser(ScannerType: type) type {
         }
 
         pub fn readRootTableValue(self: *ParserT) !Value.Table {
-            var root_table: Value = .{ .table = .empty };
-            errdefer deinitTable(self.allocator, &root_table.table);
+            var root_table: Value.Table = .{ .explicit = false, .keys = .empty };
+            errdefer deinitTable(self.allocator, &root_table);
 
-            var active_table = &root_table.table;
+            var active_table = &root_table;
 
             var i: usize = 0;
             while (true) : (i += 1) {
@@ -721,10 +724,10 @@ pub fn Parser(ScannerType: type) type {
                     self.scanner.setState(.table_key);
                     try self.nextToken();
 
-                    const table_entry = try self.consumeTableAccessGetValuePtr(&root_table.table, .root, .table_end) orelse return Error.UnexpectedToken;
+                    const table_entry = try self.consumeTableAccessGetValuePtr(&root_table, .root, .table_end) orelse return Error.UnexpectedToken;
                     const created_new = switch (table_entry.value_ptr.*) {
                         .none => blk: {
-                            table_entry.value_ptr.* = .{ .table = .empty };
+                            table_entry.value_ptr.* = .{ .table = .{ .explicit = true, .keys = .empty } };
                             break :blk true;
                         },
                         .table => false,
@@ -741,7 +744,7 @@ pub fn Parser(ScannerType: type) type {
                     try self.nextToken();
                     self.scanner.setState(.table_key);
 
-                    const table_entry = try self.consumeTableAccessGetValuePtr(&root_table.table, .root, .many_table_end) orelse return Error.UnexpectedToken;
+                    const table_entry = try self.consumeTableAccessGetValuePtr(&root_table, .root, .many_table_end) orelse return Error.UnexpectedToken;
                     const created_new = switch (table_entry.value_ptr.*) {
                         .none => blk: {
                             table_entry.value_ptr.* = .{ .array_of_tables = .empty };
@@ -751,7 +754,7 @@ pub fn Parser(ScannerType: type) type {
                         else => return Error.DuplicateKey,
                     };
                     errdefer if (created_new) table_entry.remove();
-                    try table_entry.value_ptr.array_of_tables.append(self.allocator, .empty);
+                    try table_entry.value_ptr.array_of_tables.append(self.allocator, .{ .explicit = true, .keys = .empty });
 
                     active_table = &table_entry.value_ptr.array_of_tables.items[table_entry.value_ptr.array_of_tables.items.len - 1];
                     try self.expectToken(.many_table_end);
@@ -760,7 +763,7 @@ pub fn Parser(ScannerType: type) type {
 
                 return Error.UnexpectedToken;
             }
-            return root_table.table;
+            return root_table;
         }
     };
 }
@@ -840,7 +843,7 @@ fn testKey(table_value: Value.Table, path: anytype, comptime value_type: std.met
             };
         } else {
             try std.testing.expect(parent == .table);
-            child = parent.table.get(part);
+            child = parent.table.keys.get(part);
         }
         try std.testing.expect(child != null);
         if (is_last) {

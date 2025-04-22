@@ -4,7 +4,7 @@ const parse = @import("parse.zig");
 const write_stream = @import("write_stream.zig");
 
 pub fn tableContainsNormalKeys(table: parse.Value.Table) bool {
-    var entries = table.iterator();
+    var entries = table.keys.iterator();
     return while (entries.next()) |entry| {
         switch (entry.value_ptr.*) {
             .none => unreachable,
@@ -62,7 +62,7 @@ pub fn Stringify(WriteStreamType: type) type {
                 .none => unreachable,
                 .table => |table_value| {
                     try self.stream.beginInlineTable();
-                    var entries = table_value.iterator();
+                    var entries = table_value.keys.iterator();
                     while (entries.next()) |entry| {
                         try self.stream.beginKeyPair(entry.key_ptr.*);
                         try self.writeInlineValue(entry.value_ptr.*);
@@ -89,7 +89,7 @@ pub fn Stringify(WriteStreamType: type) type {
         }
 
         pub fn writeTableKeys(self: *StringifyT, table: parse.Value.Table) !void {
-            var entries1 = table.iterator();
+            var entries1 = table.keys.iterator();
             while (entries1.next()) |entry| {
                 switch (entry.value_ptr.*) {
                     .none => unreachable,
@@ -101,7 +101,7 @@ pub fn Stringify(WriteStreamType: type) type {
                 }
             }
 
-            var entries2 = table.iterator();
+            var entries2 = table.keys.iterator();
             while (entries2.next()) |entry| {
                 try self.key_stack.append(self.key_allocator, entry.key_ptr.*);
                 defer _ = self.key_stack.pop();
@@ -110,7 +110,7 @@ pub fn Stringify(WriteStreamType: type) type {
                     .none => unreachable,
                     .array, .string, .integer, .float, .boolean, .date_time => {},
                     .table => |table_value| {
-                        if (table_value.count() == 0 or tableContainsNormalKeys(table_value)) {
+                        if (table_value.keys.count() == 0 or tableContainsNormalKeys(table_value)) {
                             try self.stream.writeDeepTable(self.key_stack.items);
                         }
                         try self.writeTableKeys(table_value);
