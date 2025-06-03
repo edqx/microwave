@@ -68,7 +68,10 @@ defer microwave.parse.deinitTable(allocator, &owned_tree);
 #### Value API
 ```zig
 pub const Value = union(enum) {
-    pub const Table = std.StringArrayHashMapUnmanaged(Value);
+    pub const Table = struct {
+        keys: std.StringArrayHashMapUnmanaged(Value),
+    };
+
     pub const Array = std.ArrayListUnmanaged(Value);
     pub const ArrayOfTables = std.ArrayListUnmanaged(Table);
 
