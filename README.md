@@ -219,12 +219,12 @@ using the write stream API:
 ```zig
 var stream: microwave.write_stream.Stream(@TypeOf(file.writer()), .{
     .newlines = .lf,
-    unicode_full_escape_strings = false,
-    format_float_options = .{
+    .unicode_full_escape_strings = false,
+    .format_float_options = .{
         .mode = .scientific,
         .precision = null,
     },
-    date_time_separator = .t,
+    .date_time_separator = .t,
 }) = .{
     .underlying_writer = file.writer(),
     .allocator = allocator,
