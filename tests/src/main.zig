@@ -3,24 +3,14 @@ const std = @import("std");
 const toml_test_files = @import("toml_test_files");
 const microwave = @import("microwave");
 
-pub const FormatDate = std.fmt.Formatter(struct {
-    pub fn fmt(
-        date: microwave.parse.Value.DateTime.Date,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+pub const FormatDate = std.fmt.Formatter(microwave.parse.Value.DateTime.Date, struct {
+    pub fn fmt(date: microwave.parse.Value.DateTime.Date, writer: *std.Io.Writer) !void {
         try writer.print("{d:0>4}-{d:0>2}-{d:0>2}", .{ date.year, date.month, date.day });
     }
 }.fmt);
 
-pub const FormatTime = std.fmt.Formatter(struct {
-    pub fn fmt(
-        time: microwave.parse.Value.DateTime.Time,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+pub const FormatTime = std.fmt.Formatter(microwave.parse.Value.DateTime.Time, struct {
+    pub fn fmt(time: microwave.parse.Value.DateTime.Time, writer: *std.Io.Writer) !void {
         try writer.print("{d:0>2}:{d:0>2}", .{ time.hour, time.minute });
         if (time.second) |second| {
             try writer.print(":{d:0>2}", .{second});
@@ -32,13 +22,8 @@ pub const FormatTime = std.fmt.Formatter(struct {
     }
 }.fmt);
 
-pub const FormatOffset = std.fmt.Formatter(struct {
-    pub fn fmt(
-        offset: microwave.parse.Value.DateTime.Offset,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+pub const FormatOffset = std.fmt.Formatter(microwave.parse.Value.DateTime.Offset, struct {
+    pub fn fmt(offset: microwave.parse.Value.DateTime.Offset, writer: *std.Io.Writer) !void {
         if (offset.isUtc()) {
             try writer.print("Z", .{});
         } else {
@@ -81,11 +66,11 @@ fn jsonTomlEql(arena: std.mem.Allocator, json_value: std.json.Value, toml_value:
         if (toml_value != .table) return false;
         var iterator = json_object.iterator();
         while (iterator.next()) |json_entry| {
-            const toml_entry_value = toml_value.table.get(json_entry.key_ptr.*) orelse return false;
+            const toml_entry_value = toml_value.table.keys.get(json_entry.key_ptr.*) orelse return false;
             if (!try jsonTomlEql(arena, json_entry.value_ptr.*, toml_entry_value)) return false;
         }
 
-        var iterator2 = toml_value.table.iterator();
+        var iterator2 = toml_value.table.keys.iterator();
         while (iterator2.next()) |toml_entry| {
             if (!json_object.contains(toml_entry.key_ptr.*)) return false;
         }
@@ -125,13 +110,13 @@ fn jsonTomlEql(arena: std.mem.Allocator, json_value: std.json.Value, toml_value:
         .float => |float| try std.fmt.allocPrint(arena, "{d}", .{float}),
         .boolean => |boolean| try std.fmt.allocPrint(arena, "{}", .{boolean}),
         .date_time => |date_time| switch (date_time) {
-            .just_date => |date| try std.fmt.allocPrint(arena, "{}", .{@as(FormatDate, .{ .data = date })}),
-            .just_time => |time| try std.fmt.allocPrint(arena, "{}", .{@as(FormatTime, .{ .data = time })}),
-            .local_date_time => |both| try std.fmt.allocPrint(arena, "{}T{}", .{
+            .just_date => |date| try std.fmt.allocPrint(arena, "{f}", .{@as(FormatDate, .{ .data = date })}),
+            .just_time => |time| try std.fmt.allocPrint(arena, "{f}", .{@as(FormatTime, .{ .data = time })}),
+            .local_date_time => |both| try std.fmt.allocPrint(arena, "{f}T{f}", .{
                 @as(FormatDate, .{ .data = both.date }),
                 @as(FormatTime, .{ .data = both.time }),
             }),
-            .offset_date_time => |all| try std.fmt.allocPrint(arena, "{}T{}{}", .{
+            .offset_date_time => |all| try std.fmt.allocPrint(arena, "{f}T{f}{f}", .{
                 @as(FormatDate, .{ .data = all.date }),
                 @as(FormatTime, .{ .data = all.time }),
                 @as(FormatOffset, .{ .data = all.offset }),
@@ -155,7 +140,9 @@ pub fn main() !void {
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
     defer std.debug.assert(gpa.deinit() == .ok);
 
-    const stdout_writer = std.io.getStdOut().writer();
+    var stdio_buffer: [4096]u8 = undefined;
+
+    var stdout_writer = std.fs.File.stdout().writer(&stdio_buffer);
 
     const allocator = gpa.allocator();
 
@@ -196,7 +183,9 @@ pub fn main() !void {
     }
 
     for (failed_tests.items) |failed_test_path| {
-        try stdout_writer.print("- fail: {s}\n", .{failed_test_path});
+        try stdout_writer.interface.print("- fail: {s}\n", .{failed_test_path});
     }
-    try stdout_writer.print("passing: {}/{}\n", .{ pass, pass + fail });
+    try stdout_writer.interface.print("passing: {}/{}\n", .{ pass, pass + fail });
+
+    try stdout_writer.interface.flush();
 }
