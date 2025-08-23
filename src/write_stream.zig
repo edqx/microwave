@@ -29,7 +29,7 @@ pub const Options = struct {
 
     newlines: Newlines = .lf,
     unicode_full_escape_strings: bool = false,
-    format_float_options: std.fmt.format_float.FormatOptions = .{},
+    format_float_options: std.fmt.float.Options = .{},
     // check_depth: Check = .arbitrary,
     date_time_separator: DateTimeSeparator = .t,
 };
@@ -193,8 +193,8 @@ pub fn Stream(WriterT: type, comptime options: Options) type {
         pub fn writeFloat(self: *WriteStreamT, float: f64) !void {
             self.assertCanWriteValue();
             try self.writeDelimeter();
-            var buf: [std.fmt.format_float.bufferSize(options.format_float_options.mode, f64)]u8 = undefined;
-            const float_string = try std.fmt.formatFloat(&buf, float, options.format_float_options);
+            var buf: [std.fmt.float.bufferSize(options.format_float_options.mode, f64)]u8 = undefined;
+            const float_string = try std.fmt.float.render(&buf, float, options.format_float_options);
             try self.underlying_writer.writeAll(float_string);
             self.finishValue();
         }
