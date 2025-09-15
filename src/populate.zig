@@ -1,18 +1,26 @@
 const std = @import("std");
 const parse = @import("parse.zig");
 
+fn getOptionalChild(T: type) type {
+    const type_info = @typeInfo(T);
+    return switch (type_info) {
+        .optional => |optional| getOptionalChild(optional.child),
+        else => T,
+    };
+}
+
 pub fn Populate(Container: type) type {
     const type_info = @typeInfo(Container);
     return struct {
         pub const Error = error{ IncorrectType, MissingKey };
 
         pub fn deinitRecursive(allocator: std.mem.Allocator, val: *Container) void {
-            if (Container == parse.Value) {
+            if (Container == parse.Value.DateTime) {
+                //
+            } else if (Container == parse.Value) {
                 val.deinitRecursive(allocator);
             } else if (Container == parse.Value.Table) {
                 parse.deinitTable(allocator, val);
-            } else if (Container == parse.Value.DateTime) {
-                val.deinit(allocator);
             } else if (type_info == .@"struct") {
                 comptime var i = type_info.@"struct".fields.len;
                 inline while (i > 0) {
@@ -29,6 +37,8 @@ pub fn Populate(Container: type) type {
                     Populate(type_info.pointer.child).deinitRecursive(allocator, &val.*[i]);
                 }
                 allocator.free(val.*);
+            } else if (type_info == .optional) {
+                if (val.*) |*inner| Populate(type_info.optional.child).deinitRecursive(allocator, inner);
             } else if (Container == i64 or Container == f64 or Container == bool) {
                 //
             } else @compileError("Cannot de-initialise container of type " ++ @typeName(Container));
@@ -39,22 +49,32 @@ pub fn Populate(Container: type) type {
                 destination.* = try value.dupeRecursive(allocator);
                 return;
             }
-            if (type_info == .@"union") {
-                inline for (type_info.@"union".fields) |field| {
-                    var field_dest: @FieldType(Container, field.name) = undefined;
-                    var success = true;
-                    Populate(@FieldType(Container, field.name)).intoFromValueOwned(allocator, &field_dest, value) catch |e| switch (e) {
-                        Error.IncorrectType, Error.MissingKey => {
-                            success = false;
-                        },
-                        else => return e,
-                    };
-                    if (success) {
-                        destination.* = @unionInit(Container, field.name, field_dest);
-                        return;
+
+            switch (type_info) {
+                .@"union" => |union_info| {
+                    if (Container != parse.Value.DateTime) {
+                        inline for (union_info.fields) |field| {
+                            var field_dest: @FieldType(Container, field.name) = undefined;
+                            var success = true;
+                            Populate(@FieldType(Container, field.name)).intoFromValueOwned(allocator, &field_dest, value) catch |e| switch (e) {
+                                Error.IncorrectType, Error.MissingKey => {
+                                    success = false;
+                                },
+                                else => return e,
+                            };
+                            if (success) {
+                                destination.* = @unionInit(Container, field.name, field_dest);
+                                return;
+                            }
+                        }
+                        return Error.IncorrectType;
                     }
-                }
-                return Error.IncorrectType;
+                },
+                .optional => |optional_info| {
+                    destination.* = @as(Container, undefined);
+                    return Populate(optional_info.child).intoFromValueOwned(allocator, &destination.*.?, value);
+                },
+                else => {},
             }
             switch (value) {
                 .none => unreachable,
@@ -75,15 +95,15 @@ pub fn Populate(Container: type) type {
                         }
                     };
                     inline for (type_info.@"struct".fields) |field| {
-                        const child_value = table_value.keys.get(field.name) orelse {
-                            if (@typeInfo(field.type) == .optional) {
-                                @field(destination, field.name) = null;
-                                continue;
+                        if (table_value.keys.get(field.name)) |child_value| {
+                            try Populate(field.type).intoFromValueOwned(allocator, &@field(destination, field.name), child_value);
+                            field_idx += 1;
+                        } else {
+                            if (@typeInfo(field.type) != .optional) {
+                                return Error.MissingKey;
                             }
-                            return Error.MissingKey;
-                        };
-                        try Populate(field.type).intoFromValueOwned(allocator, &@field(destination, field.name), child_value);
-                        field_idx += 1;
+                            @field(destination, field.name) = null;
+                        }
                     }
                 },
                 inline .array, .array_of_tables => |array_value, tag| {
@@ -127,7 +147,7 @@ pub fn Populate(Container: type) type {
                 },
                 .date_time => |date_time_value| {
                     if (Container != parse.Value.DateTime) return Error.IncorrectType;
-                    destination.* = try date_time_value.dupe(allocator);
+                    destination.* = date_time_value;
                 },
             }
         }
@@ -224,6 +244,7 @@ pub fn Populate(Container: type) type {
 const TestDog = struct {
     const Friend = struct {
         name: []const u8,
+        met_date: ?parse.Value.DateTime,
     };
 
     name: []const u8,
@@ -248,6 +269,7 @@ test Populate {
         \\
         \\[[friends]]
         \\name = "Lala"
+        \\met_date = 2025-09-15 19:37
     ;
 
     const doc = try parse.fromSlice(std.testing.allocator, buf);
@@ -261,7 +283,17 @@ test Populate {
     try std.testing.expectEqualSlices(u8, "unknown", test_struct.breed);
     try std.testing.expectEqual(16, test_struct.age);
     try std.testing.expectEqualSlices(u8, "Bo", test_struct.friends[0].name);
+    try std.testing.expectEqual(null, test_struct.friends[0].met_date);
     try std.testing.expectEqualSlices(u8, "Lala", test_struct.friends[1].name);
+    try std.testing.expect(test_struct.friends[1].met_date != null);
+    try std.testing.expect(test_struct.friends[1].met_date.? == .local_date_time);
+    try std.testing.expectEqual(2025, test_struct.friends[1].met_date.?.local_date_time.date.year);
+    try std.testing.expectEqual(9, test_struct.friends[1].met_date.?.local_date_time.date.month);
+    try std.testing.expectEqual(15, test_struct.friends[1].met_date.?.local_date_time.date.day);
+    try std.testing.expectEqual(19, test_struct.friends[1].met_date.?.local_date_time.time.hour);
+    try std.testing.expectEqual(37, test_struct.friends[1].met_date.?.local_date_time.time.minute);
+    try std.testing.expectEqual(null, test_struct.friends[1].met_date.?.local_date_time.time.second);
+    try std.testing.expectEqual(null, test_struct.friends[1].met_date.?.local_date_time.time.millisecond);
 }
 
 const Animal = union(enum) {
