@@ -2,7 +2,7 @@ const std = @import("std");
 
 const Scanner = @This();
 
-pub const Error = error{ UnexpectedEndOfStream, UnexpectedByte };
+pub const Error = std.Io.Reader.DelimiterError || error{ UnexpectedEndOfStream, UnexpectedByte };
 
 pub const Range = struct { usize, usize };
 
@@ -62,8 +62,7 @@ pub const VTable = struct {
 };
 
 fn defaultSeekPos(scanner: *Scanner) usize {
-    _ = scanner;
-    return 0;
+    return scanner.reader.seek;
 }
 
 fn isWhitespace(char: u8) bool {
@@ -78,7 +77,10 @@ fn isLinefeed(char: u8) bool {
 }
 
 fn isValueDelimiter(char: u8) bool {
-    return char == ',';
+    return switch (char) {
+        ',', ']', '}' => true,
+        else => false,
+    };
 }
 
 fn isIdentifier(char: u8) bool {
@@ -188,7 +190,7 @@ fn ignoreEof(err: std.Io.Reader.Error) !void {
 vtable: *const VTable = &.{},
 reader: *std.Io.Reader,
 
-pub fn takeToken(scanner: *Scanner) !?Token {
+pub fn takeToken(scanner: *Scanner) Error!?Token {
     const start = scanner.getPos();
     var token = scanner.takeTokenImpl() catch |e| switch (e) {
         error.EndOfStream => return null,
@@ -302,6 +304,11 @@ fn takeTokenImpl(scanner: *Scanner) !Token {
                 return error.UnexpectedEndOfStream;
             }
 
+            // this is a cheat to check for incomplete base integers (e.g., '0b')
+            if (state == .base_integer and take.len <= 2) {
+                return error.UnexpectedByte;
+            }
+
             scanner.reader.toss(take.len);
 
             return .{
@@ -316,6 +323,7 @@ fn takeTokenImpl(scanner: *Scanner) !Token {
             };
         },
         '"' => {
+            // TODO: multiline strings
             scanner.reader.toss(1);
             return .{
                 .kind = .string,
@@ -323,6 +331,7 @@ fn takeTokenImpl(scanner: *Scanner) !Token {
             };
         },
         '\'' => {
+            // TODO: multiline literal
             scanner.reader.toss(1);
             return .{
                 .kind = .literal_string,
@@ -365,6 +374,12 @@ fn takeTokenImpl(scanner: *Scanner) !Token {
                 .contents = try scanner.reader.take(1),
             };
         },
+        ',' => {
+            return .{
+                .kind = .value_delimiter,
+                .contents = try scanner.reader.take(1),
+            };
+        },
         else => {
             scanner.reader.toss(1);
             return try scanner.takeTokenImpl();
@@ -396,6 +411,10 @@ fn takeSingleString(scanner: *Scanner) ![]u8 {
 
 fn takeSingleLiteralString(scanner: *Scanner) ![]u8 {
     const slice = try scanner.reader.takeDelimiterExclusive('\'');
+    _ = scanner.reader.peekByte() catch |e| switch (e) {
+        error.ReadFailed => return e,
+        error.EndOfStream => return error.UnexpectedEndOfStream,
+    };
     scanner.reader.toss(1);
     return slice;
 }
@@ -461,7 +480,7 @@ fn maybeTakeAnyDateTime(scanner: *Scanner) !?Token {
 
                 return .{
                     .kind = token_kind,
-                    .contents = scanner.reader.buffer[start_seek..][0..scanner.reader.seek],
+                    .contents = scanner.reader.buffer[start_seek..scanner.reader.seek],
                 };
             }
         } else |e| try ignoreEof(e);
@@ -499,7 +518,7 @@ fn maybeTakeTimeToken(scanner: *Scanner) !?Token {
                     _ = try scanner.takeUntilNotDigit();
                     return .{
                         .kind = .local_time,
-                        .contents = scanner.reader.buffer[start_seek..][0..scanner.reader.seek],
+                        .contents = scanner.reader.buffer[start_seek..scanner.reader.seek],
                     };
                 }
             } else |e| try ignoreEof(e);

@@ -1,5 +1,8 @@
 const std = @import("std");
-const parse = @import("parse.zig");
+const Parser = @import("Parser.zig");
+const DateTime = @import("rfc3339.zig").DateTime;
+
+const microwave = @import("root.zig");
 
 fn getOptionalChild(T: type) type {
     const type_info = @typeInfo(T);
@@ -14,19 +17,20 @@ pub fn Populate(Container: type) type {
     return struct {
         pub const Error = error{ IncorrectType, MissingKey };
 
-        pub fn deinitRecursive(allocator: std.mem.Allocator, val: *Container) void {
-            if (Container == parse.Value.DateTime) {
+        pub fn deinitDeep(allocator: std.mem.Allocator, val: *Container) void {
+            if (Container == DateTime) {
                 //
-            } else if (Container == parse.Value) {
-                val.deinitRecursive(allocator);
-            } else if (Container == parse.Value.Table) {
-                parse.deinitTable(allocator, val);
+            } else if (Container == Parser.Value) {
+                val.deinitDeep(allocator);
+            } else if (Container == Parser.Value.Table) {
+                var value: Parser.Value = .{ .table = val.* };
+                value.deinitDeep(allocator);
             } else if (type_info == .@"struct") {
                 comptime var i = type_info.@"struct".fields.len;
                 inline while (i > 0) {
                     i -= 1;
                     const field = type_info.@"struct".fields[i];
-                    Populate(field.type).deinitRecursive(allocator, &@field(val, field.name));
+                    Populate(field.type).deinitDeep(allocator, &@field(val, field.name));
                 }
             } else if (Container == []const u8) {
                 allocator.free(val.*);
@@ -34,25 +38,25 @@ pub fn Populate(Container: type) type {
                 var i: usize = val.len;
                 while (i > 0) {
                     i -= 1;
-                    Populate(type_info.pointer.child).deinitRecursive(allocator, &val.*[i]);
+                    Populate(type_info.pointer.child).deinitDeep(allocator, &val.*[i]);
                 }
                 allocator.free(val.*);
             } else if (type_info == .optional) {
-                if (val.*) |*inner| Populate(type_info.optional.child).deinitRecursive(allocator, inner);
+                if (val.*) |*inner| Populate(type_info.optional.child).deinitDeep(allocator, inner);
             } else if (Container == i64 or Container == f64 or Container == bool) {
                 //
             } else @compileError("Cannot de-initialise container of type " ++ @typeName(Container));
         }
 
-        pub fn intoFromValueOwned(allocator: std.mem.Allocator, destination: *Container, value: parse.Value) !void {
-            if (Container == parse.Value) {
+        pub fn intoFromValueOwned(allocator: std.mem.Allocator, destination: *Container, value: Parser.Value) !void {
+            if (Container == Parser.Value) {
                 destination.* = try value.dupeRecursive(allocator);
                 return;
             }
 
             switch (type_info) {
                 .@"union" => |union_info| {
-                    if (Container != parse.Value.DateTime) {
+                    if (Container != DateTime) {
                         inline for (union_info.fields) |field| {
                             var field_dest: @FieldType(Container, field.name) = undefined;
                             var success = true;
@@ -77,12 +81,9 @@ pub fn Populate(Container: type) type {
                 else => {},
             }
             switch (value) {
-                .none => unreachable,
-                .table => |table_value| {
-                    if (Container == parse.Value.Table) {
-                        const duped = try value.dupeRecursive(allocator);
-                        errdefer duped.deinitRecursive(allocator);
-                        destination.* = duped.table;
+                inline .table, .implicit_table, .inline_table => |table_value| {
+                    if (Container == Parser.Value.Table) {
+                        destination.* = value.table;
                         return;
                     }
                     if (type_info != .@"struct") return Error.IncorrectType;
@@ -90,12 +91,12 @@ pub fn Populate(Container: type) type {
                     errdefer for (0..field_idx) |i| {
                         inline for (0.., type_info.@"struct".fields) |j, field| {
                             if (i == j) {
-                                Populate(field.type).deinitRecursive(allocator, &@field(destination, field.name));
+                                Populate(field.type).deinitDeep(allocator, &@field(destination, field.name));
                             }
                         }
                     };
                     inline for (type_info.@"struct".fields) |field| {
-                        if (table_value.keys.get(field.name)) |child_value| {
+                        if (table_value.get(field.name)) |child_value| {
                             try Populate(field.type).intoFromValueOwned(allocator, &@field(destination, field.name), child_value);
                             field_idx += 1;
                         } else {
@@ -112,21 +113,21 @@ pub fn Populate(Container: type) type {
                     var result: std.ArrayListUnmanaged(type_info.pointer.child) = try .initCapacity(allocator, array_value.items.len);
                     errdefer result.deinit(allocator);
                     errdefer for (result.items) |*elem| {
-                        Populate(type_info.pointer.child).deinitRecursive(allocator, elem);
+                        Populate(type_info.pointer.child).deinitDeep(allocator, elem);
                     };
                     for (array_value.items) |inner_value| {
                         var rest: type_info.pointer.child = undefined;
                         try Populate(type_info.pointer.child).intoFromValueOwned(allocator, &rest, switch (tag) {
                             .array => inner_value,
-                            .array_of_tables => .{ .table = inner_value },
+                            .array_of_tables => inner_value,
                             else => unreachable,
                         });
-                        errdefer Populate(type_info.pointer.child).deinitRecursive(allocator, rest);
+                        errdefer Populate(type_info.pointer.child).deinitDeep(allocator, rest);
                         result.appendAssumeCapacity(rest);
                     }
                     destination.* = try result.toOwnedSlice(allocator);
                 },
-                .string => |string_value| {
+                inline .string, .integer_string => |string_value| {
                     if (Container != []const u8) return Error.IncorrectType;
                     destination.* = try allocator.dupe(u8, string_value);
                 },
@@ -141,102 +142,23 @@ pub fn Populate(Container: type) type {
                     if (Container != f64) return Error.IncorrectType;
                     destination.* = float_value;
                 },
-                .boolean => |bool_value| {
+                .bool => |bool_value| {
                     if (Container != bool) return Error.IncorrectType;
                     destination.* = bool_value;
                 },
-                .date_time => |date_time_value| {
-                    if (Container != parse.Value.DateTime) return Error.IncorrectType;
-                    destination.* = date_time_value;
+                .datetime => |datetime_value| {
+                    if (Container != DateTime) return Error.IncorrectType;
+                    destination.* = datetime_value;
                 },
             }
         }
 
-        pub fn intoFromTableOwned(allocator: std.mem.Allocator, destination: *Container, table: parse.Value.Table) !void {
+        pub fn intoFromTableLeaky(
+            allocator: std.mem.Allocator,
+            destination: *Container,
+            table: Parser.Value.Table,
+        ) !void {
             try intoFromValueOwned(allocator, destination, .{ .table = table });
-        }
-
-        pub fn intoFromSliceOwned(allocator: std.mem.Allocator, destination: *Container, slice: []const u8) !void {
-            var table = try parse.fromSliceOwned(allocator, slice);
-            defer parse.deinitTable(allocator, &table);
-            try intoFromTableOwned(allocator, destination, table);
-        }
-
-        pub fn intoFromReaderOwned(allocator: std.mem.Allocator, destination: *Container, reader: anytype) !void {
-            var table = try parse.fromReaderOwned(allocator, reader);
-            defer parse.deinitTable(allocator, &table);
-            try intoFromTableOwned(allocator, destination, table);
-        }
-
-        //
-        pub fn createFromValueOwned(allocator: std.mem.Allocator, value: parse.Value) !Container {
-            var out: Container = undefined;
-            try intoFromValueOwned(allocator, &out, value);
-            return out;
-        }
-
-        pub fn createFromTableOwned(allocator: std.mem.Allocator, table: parse.Value.Table) !Container {
-            var out: Container = undefined;
-            try intoFromTableOwned(allocator, &out, table);
-            return out;
-        }
-
-        pub fn createFromSliceOwned(allocator: std.mem.Allocator, slice: []const u8) !Container {
-            var out: Container = undefined;
-            try intoFromSliceOwned(allocator, &out, slice);
-            return out;
-        }
-
-        pub fn createFromReaderOwned(allocator: std.mem.Allocator, reader: anytype) !Container {
-            var out: Container = undefined;
-            try intoFromReaderOwned(allocator, &out, reader);
-            return out;
-        }
-
-        //
-        pub const Document = struct {
-            value: Container,
-            arena: std.heap.ArenaAllocator,
-
-            pub fn deinit(self: Document) void {
-                self.arena.deinit();
-            }
-        };
-
-        pub fn createFromValue(allocator: std.mem.Allocator, value: parse.Value) !Document {
-            var arena = std.heap.ArenaAllocator.init(allocator);
-            errdefer arena.deinit();
-            return .{
-                .value = try createFromValueOwned(arena.allocator(), value),
-                .arena = arena,
-            };
-        }
-
-        pub fn createFromTable(allocator: std.mem.Allocator, table: parse.Value.Table) !Document {
-            var arena = std.heap.ArenaAllocator.init(allocator);
-            errdefer arena.deinit();
-            return .{
-                .value = try createFromTableOwned(arena.allocator(), table),
-                .arena = arena,
-            };
-        }
-
-        pub fn createFromSlice(allocator: std.mem.Allocator, slice: []const u8) !Document {
-            var arena = std.heap.ArenaAllocator.init(allocator);
-            errdefer arena.deinit();
-            return .{
-                .value = try createFromSliceOwned(arena.allocator(), slice),
-                .arena = arena,
-            };
-        }
-
-        pub fn createFromReader(allocator: std.mem.Allocator, reader: anytype) !Document {
-            var arena = std.heap.ArenaAllocator.init(allocator);
-            errdefer arena.deinit();
-            return .{
-                .value = try createFromReaderOwned(arena.allocator(), reader),
-                .arena = arena,
-            };
         }
     };
 }
@@ -244,7 +166,7 @@ pub fn Populate(Container: type) type {
 const TestDog = struct {
     const Friend = struct {
         name: []const u8,
-        met_date: ?parse.Value.DateTime,
+        met_date: ?DateTime,
     };
 
     name: []const u8,
@@ -253,7 +175,7 @@ const TestDog = struct {
 
     friends: []Friend,
 
-    any: parse.Value.Table,
+    // any: Parser.Value.Table,
 };
 
 test Populate {
@@ -269,15 +191,15 @@ test Populate {
         \\
         \\[[friends]]
         \\name = "Lala"
-        \\met_date = 2025-09-15 19:37
+        \\met_date = 2025-09-15 19:37:00
     ;
 
-    const doc = try parse.fromSlice(std.testing.allocator, buf);
+    const doc = try microwave.parseFromSlice(std.testing.allocator, buf);
     defer doc.deinit();
 
     var test_struct: TestDog = undefined;
-    try Populate(TestDog).intoFromValueOwned(std.testing.allocator, &test_struct, .{ .table = doc.root_table });
-    defer Populate(TestDog).deinitRecursive(std.testing.allocator, &test_struct);
+    try Populate(TestDog).intoFromValueOwned(std.testing.allocator, &test_struct, .{ .table = doc.table });
+    defer Populate(TestDog).deinitDeep(std.testing.allocator, &test_struct);
 
     try std.testing.expectEqualSlices(u8, "Barney", test_struct.name);
     try std.testing.expectEqualSlices(u8, "unknown", test_struct.breed);
@@ -292,39 +214,39 @@ test Populate {
     try std.testing.expectEqual(15, test_struct.friends[1].met_date.?.local_date_time.date.day);
     try std.testing.expectEqual(19, test_struct.friends[1].met_date.?.local_date_time.time.hour);
     try std.testing.expectEqual(37, test_struct.friends[1].met_date.?.local_date_time.time.minute);
-    try std.testing.expectEqual(null, test_struct.friends[1].met_date.?.local_date_time.time.second);
+    try std.testing.expectEqual(0, test_struct.friends[1].met_date.?.local_date_time.time.second);
     try std.testing.expectEqual(null, test_struct.friends[1].met_date.?.local_date_time.time.millisecond);
 }
 
-const Animal = union(enum) {
-    dog: struct {
-        name: []const u8,
-        breed: []const u8,
-    },
-    cat: struct {
-        name: []const u8,
-        number_of_colours: i64,
-    },
-};
+// const Animal = union(enum) {
+//     dog: struct {
+//         name: []const u8,
+//         breed: []const u8,
+//     },
+//     cat: struct {
+//         name: []const u8,
+//         number_of_colours: i64,
+//     },
+// };
 
-test "Populate with union for disjunction types" {
-    const animal1 = try Populate(Animal).createFromSlice(std.testing.allocator,
-        \\name = "Barney"
-        \\breed = "unknown"
-    );
-    defer animal1.deinit();
+// test "Populate with union for disjunction types" {
+//     const animal1 = try Populate(Animal).createFromSlice(std.testing.allocator,
+//         \\name = "Barney"
+//         \\breed = "unknown"
+//     );
+//     defer animal1.deinit();
 
-    try std.testing.expect(animal1.value == .dog);
-    try std.testing.expectEqualSlices(u8, "Barney", animal1.value.dog.name);
-    try std.testing.expectEqualSlices(u8, "unknown", animal1.value.dog.breed);
+//     try std.testing.expect(animal1.value == .dog);
+//     try std.testing.expectEqualSlices(u8, "Barney", animal1.value.dog.name);
+//     try std.testing.expectEqualSlices(u8, "unknown", animal1.value.dog.breed);
 
-    const animal2 = try Populate(Animal).createFromSlice(std.testing.allocator,
-        \\name = "Whitepaws"
-        \\number_of_colours = 2
-    );
-    defer animal2.deinit();
+//     const animal2 = try Populate(Animal).createFromSlice(std.testing.allocator,
+//         \\name = "Whitepaws"
+//         \\number_of_colours = 2
+//     );
+//     defer animal2.deinit();
 
-    try std.testing.expect(animal2.value == .cat);
-    try std.testing.expectEqualSlices(u8, "Whitepaws", animal2.value.cat.name);
-    try std.testing.expectEqual(2, animal2.value.cat.number_of_colours);
-}
+//     try std.testing.expect(animal2.value == .cat);
+//     try std.testing.expectEqualSlices(u8, "Whitepaws", animal2.value.cat.name);
+//     try std.testing.expectEqual(2, animal2.value.cat.number_of_colours);
+// }

@@ -1,26 +1,27 @@
 const std = @import("std");
 
-const parse = @import("parse.zig");
-const write_stream = @import("write_stream.zig");
+const Parser = @import("Parser.zig");
+const DateTime = @import("rfc3339.zig").DateTime;
+const WriteStream = @import("WriteStream.zig");
 
-pub fn tableContainsNormalKeys(table: parse.Value.Table) bool {
-    var entries = table.keys.iterator();
+const microwave = @import("root.zig");
+
+pub fn tableContainsNormalKeys(table: Parser.Value.Table) bool {
+    var entries = table.iterator();
     return while (entries.next()) |entry| {
         switch (entry.value_ptr.*) {
-            .none => unreachable,
-            .table, .array_of_tables => {},
-            .array, .string, .integer, .float, .boolean, .date_time => break true,
+            .inline_table, .implicit_table, .table, .array_of_tables => {},
+            .array, .string, .integer, .integer_string, .float, .bool, .datetime => break true,
         }
     } else false;
 }
 
 pub fn structContainsNormalKeys(val: anytype) bool {
     return inline for (@typeInfo(@TypeOf(val)).@"struct".fields) |field| {
-        if (field.type == parse.Value) {
+        if (field.type == Parser.Value) {
             switch (@field(val, field.name)) {
-                .none => unreachable,
                 .table, .array_of_tables => {},
-                .array, .string, .integer, .float, .boolean, .date_time => break true,
+                .array, .string, .integer, .float, .bool, .datetime => break true,
             }
             continue;
         }
@@ -28,7 +29,7 @@ pub fn structContainsNormalKeys(val: anytype) bool {
             field.type == i64 or
             field.type == f64 or
             field.type == bool or
-            field.type == parse.Value.DateTime)
+            field.type == Parser.Value.DateTime)
         {
             break true;
         }
@@ -57,12 +58,12 @@ pub fn Stringify(WriteStreamType: type) type {
             }
         }
 
-        pub fn writeInlineValue(self: *StringifyT, value: parse.Value) !void {
+        pub fn writeInlineValue(self: *StringifyT, value: Parser.Value) !void {
             switch (value) {
-                .none => unreachable,
-                .table => |table_value| {
+                .table => unreachable,
+                inline .inline_table, .implicit_table => |table_value| {
                     try self.stream.beginInlineTable();
-                    var entries = table_value.keys.iterator();
+                    var entries = table_value.iterator();
                     while (entries.next()) |entry| {
                         try self.stream.beginKeyPair(entry.key_ptr.*);
                         try self.writeInlineValue(entry.value_ptr.*);
@@ -73,44 +74,42 @@ pub fn Stringify(WriteStreamType: type) type {
                     try self.stream.beginArray();
                     for (array_value.items) |elem| {
                         try self.writeInlineValue(switch (tag) {
-                            .array_of_tables => .{ .table = elem },
+                            .array_of_tables => elem,
                             .array => elem,
                             else => unreachable,
                         });
                     }
                     try self.stream.endArray();
                 },
-                .string => |string_value| try self.writeInlineString(string_value),
+                .string, .integer_string => |string_value| try self.writeInlineString(string_value),
                 .integer => |int_value| try self.stream.writeInteger(int_value),
                 .float => |float_value| try self.stream.writeFloat(float_value),
-                .boolean => |bool_value| try self.stream.writeBoolean(bool_value),
-                .date_time => |date_time_value| try self.stream.writeDateTime(date_time_value),
+                .bool => |bool_value| try self.stream.writeBoolean(bool_value),
+                .datetime => |datetime_value| try self.stream.writeDateTime(datetime_value),
             }
         }
 
-        pub fn writeTableKeys(self: *StringifyT, table: parse.Value.Table) !void {
-            var entries1 = table.keys.iterator();
+        pub fn writeTableKeys(self: *StringifyT, table: Parser.Value.Table) !void {
+            var entries1 = table.iterator();
             while (entries1.next()) |entry| {
                 switch (entry.value_ptr.*) {
-                    .none => unreachable,
-                    .table, .array_of_tables => {},
-                    .array, .string, .integer, .float, .boolean, .date_time => {
+                    .inline_table, .implicit_table, .table, .array_of_tables => {},
+                    .array, .string, .integer, .integer_string, .float, .bool, .datetime => {
                         try self.stream.beginKeyPair(entry.key_ptr.*);
                         try self.writeInlineValue(entry.value_ptr.*);
                     },
                 }
             }
 
-            var entries2 = table.keys.iterator();
+            var entries2 = table.iterator();
             while (entries2.next()) |entry| {
                 try self.key_stack.append(self.key_allocator, entry.key_ptr.*);
                 defer _ = self.key_stack.pop();
 
                 switch (entry.value_ptr.*) {
-                    .none => unreachable,
-                    .array, .string, .integer, .float, .boolean, .date_time => {},
-                    .table => |table_value| {
-                        if (table_value.keys.count() == 0 or tableContainsNormalKeys(table_value)) {
+                    .array, .string, .integer, .integer_string, .float, .bool, .datetime => {},
+                    .inline_table, .implicit_table, .table => |table_value| {
+                        if (table_value.count() == 0 or tableContainsNormalKeys(table_value)) {
                             try self.stream.writeDeepTable(self.key_stack.items);
                         }
                         try self.writeTableKeys(table_value);
@@ -118,7 +117,7 @@ pub fn Stringify(WriteStreamType: type) type {
                     .array_of_tables => |many_tables| {
                         for (many_tables.items) |many_table_value| {
                             try self.stream.writeDeepManyTable(self.key_stack.items);
-                            try self.writeTableKeys(many_table_value);
+                            try self.writeTableKeys(many_table_value.table);
                         }
                     },
                 }
@@ -128,9 +127,9 @@ pub fn Stringify(WriteStreamType: type) type {
         pub fn writeInline(self: *StringifyT, val: anytype) !void {
             const val_type = @TypeOf(val);
             const type_info = @typeInfo(val_type);
-            if (val_type == parse.Value.Table) {
+            if (val_type == Parser.Value.Table) {
                 try self.writeInlineValue(.{ .table = val });
-            } else if (val_type == parse.Value) {
+            } else if (val_type == Parser.Value) {
                 try self.writeInlineValue(val);
             } else if (val_type == []const u8) {
                 try self.writeInlineString(val);
@@ -140,7 +139,7 @@ pub fn Stringify(WriteStreamType: type) type {
                 try self.stream.writeFloat(val);
             } else if (val_type == bool) {
                 try self.stream.writeBoolean(val);
-            } else if (val_type == parse.Value.DateTime) {
+            } else if (val_type == DateTime) {
                 try self.stream.writeDateTime(val);
             } else if (type_info == .@"struct") {
                 try self.stream.beginInlineTable();
@@ -165,9 +164,9 @@ pub fn Stringify(WriteStreamType: type) type {
                     struct_field.type == i64 or
                     struct_field.type == f64 or
                     struct_field.type == bool or
-                    struct_field.type == parse.Value.DateTime or
-                    struct_field.type == parse.Value.Table or
-                    struct_field.type == parse.Value or
+                    struct_field.type == DateTime or
+                    struct_field.type == Parser.Value.Table or
+                    struct_field.type == Parser.Value or
                     (field_type_info == .pointer and
                         field_type_info.pointer.size == .slice and
                         @typeInfo(field_type_info.pointer.child) != .@"struct"))
@@ -208,45 +207,45 @@ pub fn Stringify(WriteStreamType: type) type {
     };
 }
 
-pub fn tableToStream(temp_allocator: std.mem.Allocator, root_table: parse.Value.Table, stream: anytype) !void {
+pub fn tableToStream(temp_allocator: std.mem.Allocator, root_table: Parser.Value.Table, stream: anytype) !void {
     var stringifier: Stringify(@TypeOf(stream)) = .{ .key_allocator = temp_allocator, .stream = stream };
     defer stringifier.deinit();
 
     try stringifier.writeTableKeys(root_table);
 }
 
-pub fn writeTable(temp_allocator: std.mem.Allocator, root_table: parse.Value.Table, writer: anytype) !void {
-    var stream: write_stream.Stream(@TypeOf(writer), .{}) = .{
+pub fn writeTable(temp_allocator: std.mem.Allocator, root_table: Parser.Value.Table, writer: *std.Io.Writer) !void {
+    var write_stream: WriteStream = .{
         .allocator = temp_allocator,
-        .underlying_writer = writer,
+        .writer = writer,
     };
-    defer stream.deinit();
+    defer write_stream.deinit();
 
-    try tableToStream(temp_allocator, root_table, &stream);
+    try tableToStream(temp_allocator, root_table, &write_stream);
 }
 
-pub fn toStream(temp_allocator: std.mem.Allocator, val: anytype, stream: anytype) !void {
+pub fn writeToStream(temp_allocator: std.mem.Allocator, val: anytype, stream: *WriteStream) !void {
     var stringifier: Stringify(@TypeOf(stream)) = .{ .key_allocator = temp_allocator, .stream = stream };
     defer stringifier.deinit();
 
     try stringifier.writeFields(val);
 }
 
-pub fn write(temp_allocator: std.mem.Allocator, val: anytype, writer: anytype) !void {
-    var stream: write_stream.Stream(@TypeOf(writer), .{}) = .{
+pub fn write(temp_allocator: std.mem.Allocator, val: anytype, writer: *std.Io.Writer) !void {
+    var write_stream: WriteStream = .{
         .allocator = temp_allocator,
-        .underlying_writer = writer,
+        .writer = writer,
     };
-    defer stream.deinit();
+    defer write_stream.deinit();
 
-    try toStream(temp_allocator, val, &stream);
+    try writeToStream(temp_allocator, val, &write_stream);
 }
 
 test writeTable {
-    var dynamic_buffer: std.ArrayListUnmanaged(u8) = .empty;
-    defer dynamic_buffer.deinit(std.testing.allocator);
+    var allocating_writer: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer allocating_writer.deinit();
 
-    var table = try parse.fromSliceOwned(std.testing.allocator,
+    var document = try microwave.parseFromSlice(std.testing.allocator,
         \\valid_first_names = ["Barney", "Lala", "Bo", { name = "Jenny", dead = true }]
         \\
         \\[dog]
@@ -263,9 +262,9 @@ test writeTable {
         \\body = "black"
         \\feet = "white"
     );
-    defer parse.deinitTable(std.testing.allocator, &table);
+    defer document.deinit();
 
-    try writeTable(std.testing.allocator, table, dynamic_buffer.writer(std.testing.allocator));
+    try writeTable(std.testing.allocator, document.table, &allocating_writer.writer);
 
     try std.testing.expectEqualSlices(u8,
         \\valid_first_names = [ "Barney", "Lala", "Bo", { name = "Jenny", dead = true } ]
@@ -283,7 +282,7 @@ test writeTable {
         \\head = "white"
         \\body = "black"
         \\feet = "white"
-    , dynamic_buffer.items);
+    , allocating_writer.written());
 }
 
 const Dog = struct {
@@ -307,12 +306,12 @@ const Dog = struct {
     colours: []const []const u8,
     friends: []const Friend,
 
-    other_info: parse.Value,
+    other_info: Parser.Value,
 };
 
 test write {
-    var dynamic_buffer: std.ArrayListUnmanaged(u8) = .empty;
-    defer dynamic_buffer.deinit(std.testing.allocator);
+    var allocating_writer: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer allocating_writer.deinit();
 
     const val: Dog = .{
         .name = "Barney",
@@ -333,7 +332,7 @@ test write {
         .other_info = .{ .string = "really old" },
     };
 
-    try write(std.testing.allocator, val, dynamic_buffer.writer(std.testing.allocator));
+    try write(std.testing.allocator, val, &allocating_writer.writer);
     try std.testing.expectEqualSlices(u8,
         \\name = "Barney"
         \\breed = "unknown"
@@ -349,5 +348,5 @@ test write {
         \\[friends.relationship]
         \\friendly = true
         \\difficult = false
-    , dynamic_buffer.items);
+    , allocating_writer.written());
 }
