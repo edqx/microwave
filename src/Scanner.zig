@@ -679,14 +679,6 @@ pub fn getPos(scanner: *Scanner) usize {
     return scanner.vtable.getSeekPos(scanner) + scanner.reader.seek;
 }
 
-pub fn rangeContents(self: *Scanner, range: Token.Range) []const u8 {
-    return self.buffer[range.start..range.end];
-}
-
-pub fn tokenContents(self: *Scanner, token: Token) []const u8 {
-    return self.rangeContents(token.range);
-}
-
 const test_buf: []const u8 =
     \\# this is an example task
     \\name="Write a Shopping List"
