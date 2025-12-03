@@ -219,7 +219,6 @@ fn consumeAndAccessDeepKey(
             .value_delimiter,
             .offset_date_time,
             .local_date_time,
-            .local_date,
             .local_time,
             .table_or_array_start,
             .table_or_array_end,
@@ -245,7 +244,7 @@ fn consumeAndAccessDeepKey(
                 expect_access = false;
             },
 
-            .identifier, .string, .literal_string, .integer, .base_integer, .float, .inf, .nan => {
+            .identifier, .string, .literal_string, .integer, .base_integer, .float, .inf, .nan, .local_date => {
                 // TODO: float keys! annoying!
 
                 if (expect_access) return error.UnexpectedToken;
