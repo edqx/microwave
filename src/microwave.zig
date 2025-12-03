@@ -4,9 +4,7 @@ pub const Scanner = @import("Scanner.zig");
 pub const Parser = @import("Parser.zig");
 pub const Populate = @import("populate.zig").Populate;
 pub const WriteStream = @import("WriteStream.zig");
-pub const stringify = @import("stringify.zig");
-
-pub const Stringify = stringify.Stringify;
+pub const Stringify = @import("Stringify.zig");
 
 pub const DateTime = @import("rfc3339.zig").DateTime;
 
@@ -82,5 +80,5 @@ test {
     _ = Parser;
     _ = Populate;
     _ = WriteStream;
-    _ = stringify;
+    _ = Stringify;
 }
