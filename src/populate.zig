@@ -2,7 +2,7 @@ const std = @import("std");
 const Parser = @import("Parser.zig");
 const DateTime = @import("rfc3339.zig").DateTime;
 
-const microwave = @import("root.zig");
+const microwave = @import("microwave.zig");
 
 fn getOptionalChild(T: type) type {
     const type_info = @typeInfo(T);

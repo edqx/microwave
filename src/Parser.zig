@@ -575,17 +575,3 @@ test Parser {
     try std.testing.expectEqualSlices(u8, "Lala", root_table.get("other_dog").?.array_of_tables.items[1].table.get("name").?.string);
     try std.testing.expectEqual(3, root_table.get("other_dog").?.array_of_tables.items[1].table.get("meta").?.table.get("age").?.integer);
 }
-
-// test "parse test" {
-//     const res = try fromSlice(std.testing.allocator,
-//         \\
-//         \\"\u0000" = "null"
-//         \\'\u0000' = "different key"
-//         \\"\u0008 \u000c \U00000041 \u007f \u0080 \u00ff \ud7ff \ue000 \uffff \U00010000 \U0010ffff" = "escaped key"
-//         \\
-//         \\"~  ÿ ퟿    𐀀 􏿿" = "basic key"
-//         \\'l ~  ÿ ퟿    𐀀 􏿿' = "literal key"
-//         \\
-//     );
-//     defer res.deinit();
-// }

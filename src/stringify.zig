@@ -4,7 +4,7 @@ const Parser = @import("Parser.zig");
 const DateTime = @import("rfc3339.zig").DateTime;
 const WriteStream = @import("WriteStream.zig");
 
-const microwave = @import("root.zig");
+const microwave = @import("microwave.zig");
 
 pub fn tableContainsNormalKeys(table: Parser.Value.Table) bool {
     var entries = table.iterator();
