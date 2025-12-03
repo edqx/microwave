@@ -20,31 +20,6 @@ This parser should be spec compliant.
 Run `zig build docs` to access local documentation for Microwave. Use your favourite method to serve static sites,
 for example with Python: `python -m http.server` or with NodeJS: `npx serve`.
 
-### Scanner API
-As a low level API, Microwave provides the ability to scan through a file and
-iterate through individual tokens.
-
-It doesn't guarantee a well-formed TOML file. Most of those checks are done in the
-[parsing stage](#parser-api).
-
-#### Initialise Scanner
-To initialise the scanner, you need only pass in a [`*Reader`](https://ziglang.org/documentation/0.15.2/std/#std.Io.Reader)
-of your choice:
-```zig
-var scanner: microwave.Scanner = .{ reader = &reader };
-
-while (try scanner.next()) |token| {
-    // token.kind, token.contents
-```
-
-> [!IMPORTANT]
-> A decently sized buffer is important for properly parsing many TOML structures. 35 bytes is the most
-> required, which is the maximum size of a [date](https://toml.io/en/v1.0.0#offset-date-time) value.
-
-> [!WARNING]
-> Previous token contents may be invalidated at any point while iterating, depending on your reader
-> buffer size.
-
 ## Related Projects
 Check out my other project, [dishwasher](https://github.com/edqx/dishwasher) for parsing XML files.
 
