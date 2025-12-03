@@ -217,36 +217,3 @@ test Populate {
     try std.testing.expectEqual(0, test_struct.friends[1].met_date.?.local_date_time.time.second);
     try std.testing.expectEqual(null, test_struct.friends[1].met_date.?.local_date_time.time.millisecond);
 }
-
-// const Animal = union(enum) {
-//     dog: struct {
-//         name: []const u8,
-//         breed: []const u8,
-//     },
-//     cat: struct {
-//         name: []const u8,
-//         number_of_colours: i64,
-//     },
-// };
-
-// test "Populate with union for disjunction types" {
-//     const animal1 = try Populate(Animal).createFromSlice(std.testing.allocator,
-//         \\name = "Barney"
-//         \\breed = "unknown"
-//     );
-//     defer animal1.deinit();
-
-//     try std.testing.expect(animal1.value == .dog);
-//     try std.testing.expectEqualSlices(u8, "Barney", animal1.value.dog.name);
-//     try std.testing.expectEqualSlices(u8, "unknown", animal1.value.dog.breed);
-
-//     const animal2 = try Populate(Animal).createFromSlice(std.testing.allocator,
-//         \\name = "Whitepaws"
-//         \\number_of_colours = 2
-//     );
-//     defer animal2.deinit();
-
-//     try std.testing.expect(animal2.value == .cat);
-//     try std.testing.expectEqualSlices(u8, "Whitepaws", animal2.value.cat.name);
-//     try std.testing.expectEqual(2, animal2.value.cat.number_of_colours);
-// }

@@ -1,66 +1,163 @@
+//! A lexical token iterator for a TOML file.
+
 const std = @import("std");
 
 const Scanner = @This();
 
 pub const Error = std.Io.Reader.DelimiterError || error{ UnexpectedEndOfStream, UnexpectedByte };
 
+/// Represents a file position range, from start to end (exclusive).
 pub const Range = struct { usize, usize };
 
+/// A single lexical token in a TOML file.
+///
+/// https://toml.io/en/v1.0.0#spec
 pub const Token = struct {
     pub const Kind = enum {
+        /// Either \r\n or just \n
+        ///
+        /// https://toml.io/en/v1.0.0#spec
         newline,
+        /// A '#' followed by the rest of the line, not including the newline
+        ///
+        /// https://toml.io/en/v1.0.0#comment
         comment,
 
+        /// A combination of A-Z, a-z, _, -, 0-9
+        ///
+        /// Note that not _all_ keys will be represented by an .identifier token:
+        /// - String keys are represented by .string or .literal_string
+        /// - Integer keys and other ambiguous tokens used for keys may fall under .integer, .base_integer, .float, etc.
+        ///
+        /// https://toml.io/en/v1.0.0#keys
         identifier,
+        /// A single '.' used for adding key depth and accessing sub-keys
+        ///
+        /// https://toml.io/en/v1.0.0#keys
         access,
+        /// A single '=' for separating keys from their values
+        ///
+        /// https://toml.io/en/v1.0.0#keyvalue-pair
         equals,
 
+        /// A single ',' for separating array values, as well as inline table key pairs.
         value_delimiter,
 
+        /// A single-line or multi-line string wrapped in "s with full escaping. Does not
+        /// include the quotes.
+        ///
+        /// https://toml.io/en/v1.0.0#string
         string,
+        /// A single-line or multi-line literal string wrapped in 's with no escaping. Does
+        /// not include the quotes.
+        ///
+        /// https://toml.io/en/v1.0.0#string
         literal_string,
 
+        /// A sequence of digits, preceeded by a sign (+ or -) and optionally including
+        /// underscores to separate groups of digits.
+        ///
+        /// https://toml.io/en/v1.0.0#integer
         integer,
+        /// A sequence of digits with a base, NOT preceeded by a sign (+ or -) but beginning
+        /// with a base indicator of either "0x" for hex, "0b" for binary or "0o" for octal.
+        ///
+        /// The actual digits are not checked against the base here, meaning that a binary
+        /// base integer may contain digits that are not 0 or 1.
+        ///
+        /// https://toml.io/en/v1.0.0#integer
         base_integer,
+        /// A floating point number, consisting of a sign (+ or -), a sequence of digits,
+        /// optionally a fractional part and optionally an exponential part.
+        ///
+        /// https://toml.io/en/v1.0.0#float
         float,
+        /// Positive or negative infinity, represented by the keyword "inf".
+        ///
+        /// https://toml.io/en/v1.0.0#float
         inf,
+        /// Positive or negative NaN, represented by the keyword "nan".
+        ///
+        /// https://toml.io/en/v1.0.0#float
         nan,
 
+        /// An [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) formatted date-time
+        /// with a timezone offset, optionally with indefinite precision of fractional
+        /// seconds.
+        ///
+        /// https://toml.io/en/v1.0.0#offset-date-time
         offset_date_time,
+        /// An [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) formatted date-time
+        /// without a timezone offset, optionally with indefinite precision of fractional
+        /// seconds.
+        ///
+        /// https://toml.io/en/v1.0.0#offset-date-time
         local_date_time,
+        /// An [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) formatted date.
+        ///
+        /// https://toml.io/en/v1.0.0#offset-date-time
         local_date,
+        /// An [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) formatted time, optionally
+        /// with indefinite precision of fractional seconds.
+        ///
+        /// https://toml.io/en/v1.0.0#offset-date-time
         local_time,
 
+        /// Either the beginning of a table at the root level, or the start of an array value.
+        /// Since the scanner does not hold any state, it is up to the user to determine
+        /// which the token represents.
+        ///
+        /// https://toml.io/en/v1.0.0#array
+        ///
+        /// https://toml.io/en/v1.0.0#table
         table_or_array_start,
+        /// Either the end of a table at the root level, or the end of an array value.
+        /// Since the scanner does not hold any state, it is up to the user to determine
+        /// which the token represents.
+        ///
+        /// https://toml.io/en/v1.0.0#array
+        ///
+        /// https://toml.io/en/v1.0.0#table
         table_or_array_end,
+        /// The beginning of an inline table.
+        ///
+        /// https://toml.io/en/v1.0.0#inline-table
         inline_table_start,
+        /// The end of an inline table.
+        ///
+        /// https://toml.io/en/v1.0.0#inline-table
         inline_table_end,
     };
 
+    /// The kind of token that the underlying bytes represent.
     kind: Kind,
+    /// The underlying bytes that make up this token. Note that this references buffered memory
+    /// inside the reader given to the scanner, and therefore may be invalidated by future
+    /// iterations when the buffer is flushed.
     contents: []u8,
 
+    /// The byte offsets of the file for the entire token, if a `VTable` with `VTable.getSeekPos` is
+    /// provided to the scanner. Note that it is not required to take into account the current
+    /// reader buffer seek position, as this is accounted for already by the scanner.
+    ///
+    /// Note that this does not just include the _data_ of the token, but the entire region
+    /// of the file responsible for the token. e.g., the file range for string tokens will
+    /// include the wrapping quotes.
     file_range: Range = .{ 0, 0 },
 };
 
-const NumberParseState = enum {
-    sign,
-    base,
-    integer,
-    base_integer,
-    fraction,
-    exponent_sign,
-    exponent,
-
-    identifier,
-};
-
+/// A table of functions for providing additional information to the scanner.
 pub const VTable = struct {
+    /// The position in the overall file/source that the scanner is currently at. Note that
+    ///
+    ///
+    /// Defaults to 0, useful for reading from a fixed slice.
     getSeekPos: *const fn (scanner: *Scanner) usize = defaultSeekPos,
 };
 
 fn defaultSeekPos(scanner: *Scanner) usize {
-    return scanner.reader.seek;
+    _ = scanner;
+    return 0;
 }
 
 fn isWhitespace(char: u8) bool {
@@ -193,8 +290,15 @@ fn unexpectedEof(err: std.Io.Reader.Error) Error {
 }
 
 vtable: *const VTable = &.{},
+/// The underlying reader that the scanner will attempt to read from.
+///
+/// Note that an adequate buffer size is required for reading a lot of potential data from
+/// the TOML source. A minimum size of 35 bytes is recommended to accomodate the larger data
+/// types, such as dates.
 reader: *std.Io.Reader,
 
+/// Take a single lexical token from the underlying reader, advancing the seek
+/// position.
 pub fn takeToken(scanner: *Scanner) Error!?Token {
     const start = scanner.getPos();
     var token = scanner.takeTokenImpl() catch |e| switch (e) {
@@ -675,6 +779,7 @@ fn isPeekEndValue(scanner: *Scanner, offset: usize) !bool {
     return false;
 }
 
+/// Get the current position in the overall TOML file that the scanner is at.
 pub fn getPos(scanner: *Scanner) usize {
     return scanner.vtable.getSeekPos(scanner) + scanner.reader.seek;
 }

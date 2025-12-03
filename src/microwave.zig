@@ -6,6 +6,8 @@ pub const Populate = @import("populate.zig").Populate;
 pub const WriteStream = @import("WriteStream.zig");
 pub const stringify = @import("stringify.zig");
 
+pub const Stringify = stringify.Stringify;
+
 pub const DateTime = @import("rfc3339.zig").DateTime;
 
 pub const DocumentLeaky = struct {
