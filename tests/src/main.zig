@@ -66,12 +66,14 @@ fn jsonTomlEql(arena: std.mem.Allocator, json_value: std.json.Value, toml_value:
             .table, .inline_table, .implicit_table => |table| {
                 var iterator = json_object.iterator();
                 while (iterator.next()) |json_entry| {
+                    std.debug.print("toml has {s}? {}\n", .{ json_entry.key_ptr.*, table.contains(json_entry.key_ptr.*) });
                     const toml_entry_value = table.get(json_entry.key_ptr.*) orelse return false;
                     if (!try jsonTomlEql(arena, json_entry.value_ptr.*, toml_entry_value)) return false;
                 }
 
                 var iterator2 = table.iterator();
                 while (iterator2.next()) |toml_entry| {
+                    std.debug.print("json has {s}? {}\n", .{ toml_entry.key_ptr.*, json_object.contains(toml_entry.key_ptr.*) });
                     if (!json_object.contains(toml_entry.key_ptr.*)) return false;
                 }
 

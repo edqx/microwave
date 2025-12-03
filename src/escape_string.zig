@@ -1,6 +1,6 @@
 const std = @import("std");
 
-fn trimInitialNewlineFromString(token_contents: []const u8) []const u8 {
+pub fn trimInitialNewlineFromString(token_contents: []const u8) []const u8 {
     if (token_contents.len > 0) {
         if (token_contents[0] == '\n') return token_contents[1..];
         if (token_contents[0] == '\r' and token_contents[1] == '\n') return token_contents[2..];

@@ -5,7 +5,7 @@ const Scanner = @import("Scanner.zig");
 const rfc3339 = @import("rfc3339.zig");
 const DateTime = rfc3339.DateTime;
 
-const parseEscapedStringAlloc = @import("escape_string.zig").parseEscapedStringAlloc;
+const escape_string = @import("escape_string.zig");
 
 const Parser = @This();
 
@@ -150,7 +150,7 @@ fn consumeInlineTableKeys(parser: *Parser, inline_table_value: *Value) !void {
         const parent_table, const key = parser.consumeAndAccessDeepKey(&inline_table_value.inline_table, .equals, .pair, &key_depth) catch |e| switch (e) {
             error.UnexpectedToken => {
                 const last_token = parser.last_token.?;
-                if (first and key_depth == 0 and last_token.kind == .inline_table_end) {
+                if (key_depth == 0 and last_token.kind == .inline_table_end) {
                     break;
                 }
                 return e;
@@ -162,10 +162,15 @@ fn consumeInlineTableKeys(parser: *Parser, inline_table_value: *Value) !void {
 
         _ = try parser.createTableValue(parent_table, key, value);
 
-        const delim_token = try parser.takeToken() orelse return error.EndOfTokenStream;
-        if (delim_token.kind == .value_delimiter) continue;
-        if (delim_token.kind == .inline_table_end) break;
-        return error.UnexpectedToken;
+        const table_ended = while (true) {
+            const delim_token = try parser.takeToken() orelse return error.EndOfTokenStream;
+            if (delim_token.kind == .newline) continue;
+            if (delim_token.kind == .comment) continue;
+            if (delim_token.kind == .value_delimiter) break false;
+            if (delim_token.kind == .inline_table_end) break true;
+            return error.UnexpectedToken;
+        };
+        if (table_ended) break;
     }
 }
 
@@ -183,9 +188,12 @@ fn consumeRootTableKeys(
 
         _ = try parser.createTableValue(parent_table, key, value);
 
-        const next_token = try parser.takeToken() orelse break;
-        if (next_token.kind == .newline) continue;
-        return error.UnexpectedToken;
+        while (true) {
+            const next_token = try parser.takeToken() orelse break;
+            if (next_token.kind == .newline) break;
+            if (next_token.kind == .comment) continue;
+            return error.UnexpectedToken;
+        }
     }
 }
 
@@ -203,13 +211,10 @@ fn consumeAndAccessDeepKey(
     var parent_table: *Value.Table = root_table;
     var last_interned_key: ?[]const u8 = null;
 
-    while (true) : ({
-        if (depth) |d| d.* += 1;
-    }) {
+    while (true) {
         const next_token = try parser.takeToken() orelse return error.EndOfTokenStream;
         if (next_token.kind == end_token_kind) break;
         switch (next_token.kind) {
-            .newline,
             .equals,
             .value_delimiter,
             .offset_date_time,
@@ -220,11 +225,12 @@ fn consumeAndAccessDeepKey(
             .table_or_array_end,
             .inline_table_start,
             .inline_table_end,
-            .positive_inf,
-            .negative_inf,
-            .positive_nan,
-            .negative_nan,
-            => return error.UnexpectedToken,
+            => {
+                return error.UnexpectedToken;
+            },
+            .newline => {
+                if (access_kind == .pair) continue;
+            },
 
             .comment => {
                 if (access_kind == .pair) {
@@ -239,7 +245,9 @@ fn consumeAndAccessDeepKey(
                 expect_access = false;
             },
 
-            .identifier, .string, .literal_string, .integer, .base_integer, .float => {
+            .identifier, .string, .literal_string, .integer, .base_integer, .float, .inf, .nan => {
+                // TODO: float keys! annoying!
+
                 if (expect_access) return error.UnexpectedToken;
 
                 if (last_interned_key) |key| {
@@ -249,15 +257,24 @@ fn consumeAndAccessDeepKey(
                         if (access_kind == .definition) {
                             if (path_table_value.* == .array_of_tables) {
                                 break :resolve_parent &path_table_value.array_of_tables.items[path_table_value.array_of_tables.items.len - 1].table;
+                            } else if (path_table_value.* == .table) {
+                                break :resolve_parent &path_table_value.*.table;
                             }
                         }
                         break :resolve_parent &path_table_value.*.implicit_table;
                     };
                 }
 
-                // TODO: escape 'string' token contents
-                last_interned_key = try parser.getInternedKey(next_token.contents);
+                if (next_token.kind == .string) {
+                    const escaped = try escape_string.parseEscapedStringAlloc(parser.key_allocator, next_token.contents);
+                    defer parser.key_allocator.free(escaped);
+
+                    last_interned_key = try parser.getInternedKey(escaped);
+                } else {
+                    last_interned_key = try parser.getInternedKey(next_token.contents);
+                }
                 expect_access = true;
+                if (depth) |d| d.* += 1;
             },
         }
     }
@@ -277,7 +294,7 @@ fn getOrCreateImplicitTableValuePath(
         const existing_value = put_table_path_result.value_ptr.*;
         switch (access_kind) {
             .definition => {
-                if (existing_value != .implicit_table and existing_value != .array_of_tables) return error.AstError;
+                if (existing_value != .implicit_table and existing_value != .table and existing_value != .array_of_tables) return error.AstError;
             },
             .pair => {
                 if (existing_value != .implicit_table) return error.AstError;
@@ -324,12 +341,12 @@ fn parseValue(parser: *Parser, next_token: Scanner.Token) Error!Value {
         },
 
         .string => {
-            const escaped_string = try parseEscapedStringAlloc(parser.allocator, next_token.contents);
+            const escaped_string = try escape_string.parseEscapedStringAlloc(parser.allocator, next_token.contents);
             errdefer parser.allocator.free(escaped_string);
             return .{ .string = escaped_string };
         },
         .literal_string => {
-            const duped_string = try parser.allocator.dupe(u8, next_token.contents);
+            const duped_string = try parser.allocator.dupe(u8, escape_string.trimInitialNewlineFromString(next_token.contents));
             errdefer parser.allocator.free(duped_string);
             return .{ .string = duped_string };
         },
@@ -355,17 +372,15 @@ fn parseValue(parser: *Parser, next_token: Scanner.Token) Error!Value {
             return .{ .float = float };
         },
 
-        .positive_inf => {
-            return .{ .float = std.math.inf(f64) };
+        .inf => return switch (next_token.contents[0]) {
+            '+' => .{ .float = std.math.inf(f64) },
+            '-' => .{ .float = -std.math.inf(f64) },
+            else => .{ .float = std.math.inf(f64) },
         },
-        .negative_inf => {
-            return .{ .float = -std.math.inf(f64) };
-        },
-        .positive_nan => {
-            return .{ .float = std.math.nan(f64) };
-        },
-        .negative_nan => {
-            return .{ .float = -std.math.nan(f64) };
+        .nan => return switch (next_token.contents[0]) {
+            '+' => .{ .float = std.math.nan(f64) },
+            '-' => .{ .float = -std.math.nan(f64) },
+            else => .{ .float = std.math.nan(f64) },
         },
 
         .offset_date_time => {
@@ -479,6 +494,7 @@ pub fn takeDocumentTable(parser: *Parser) !Value.Table {
             },
             error.EndOfTokenStream => {
                 if (key_depth == 0) break;
+                return e;
             },
             else => return e,
         };
@@ -573,29 +589,3 @@ test Parser {
 //     );
 //     defer res.deinit();
 // }
-
-test "Parser2" {
-    // const buf: []const u8 =
-    //     \\title = [ " \", ",]
-    // ++ "\n";
-
-    const buf: []const u8 =
-        &.{
-            0x74, 0x69, 0x74, 0x6c, 0x65, 0x20, 0x3d, 0x20,
-            0x5b, 0x20, 0x22, 0x20, 0x5c, 0x22, 0x2c, 0x20,
-            0x22, 0x2c, 0x5d, 0x0a,
-        };
-    var reader: std.Io.Reader = .fixed(buf);
-
-    var scanner = Scanner{ .reader = &reader };
-    var parser: Parser = .{
-        .allocator = std.testing.allocator,
-        .key_allocator = std.testing.allocator,
-        .key_set = .empty,
-        .scanner = &scanner,
-    };
-    defer parser.deinit();
-
-    const root_table = try parser.takeDocumentTable();
-    defer deinitTable(std.testing.allocator, root_table);
-}

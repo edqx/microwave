@@ -23,10 +23,8 @@ pub const Token = struct {
         integer,
         base_integer,
         float,
-        positive_inf,
-        negative_inf,
-        positive_nan,
-        negative_nan,
+        inf,
+        nan,
 
         offset_date_time,
         local_date_time,
@@ -187,6 +185,13 @@ fn ignoreEof(err: std.Io.Reader.Error) !void {
     }
 }
 
+fn unexpectedEof(err: std.Io.Reader.Error) Error {
+    return switch (err) {
+        error.EndOfStream => error.UnexpectedEndOfStream,
+        error.ReadFailed => |e| e,
+    };
+}
+
 vtable: *const VTable = &.{},
 reader: *std.Io.Reader,
 
@@ -213,107 +218,126 @@ fn takeTokenImpl(scanner: *Scanner) !Token {
             };
         },
         'A'...'Z', 'a'...'z', '_' => {
+            const contents = try scanner.takeUntilNotIdentifier();
+
             return .{
-                .kind = .identifier,
-                .contents = try scanner.takeUntilNotIdentifier(),
+                .kind = if (std.mem.eql(u8, contents, "inf"))
+                    .inf
+                else if (std.mem.eql(u8, contents, "nan"))
+                    .nan
+                else
+                    .identifier,
+                .contents = contents,
             };
         },
         '+', '-', '0'...'9' => {
+            if (byte == '+' or byte == '-') {
+                if (peekOffset(scanner.reader, 1, 3)) |bytes| {
+                    if (std.mem.eql(u8, bytes, "inf")) {
+                        return .{
+                            .kind = .inf,
+                            .contents = try scanner.reader.take(4),
+                        };
+                    }
+                    if (std.mem.eql(u8, bytes, "nan")) {
+                        return .{
+                            .kind = .nan,
+                            .contents = try scanner.reader.take(4),
+                        };
+                    }
+                } else |e| try ignoreEof(e);
+            }
+
+            // we can use this to fill the buffer as much as possible. this works because the final '\n'
+            // is still ultimately part of the buffer
+            _ = try scanner.reader.peekDelimiterExclusive('\n');
             if (isDigit(byte)) {
                 // let's fill the buffer early so that any tossed bytes don't get invalidated
                 // by subsequent calls to 'peek'
-                scanner.reader.fillMore() catch |e| try ignoreEof(e);
                 if (try scanner.maybeTakeAnyDateTime()) |date_time_token| {
                     return date_time_token;
                 }
             }
 
-            var state: NumberParseState = .sign;
             var kind: Token.Kind = .integer;
+            var integer_base: ?u8 = null;
 
-            var take: []u8 = &.{};
+            const start_seek = scanner.reader.seek;
 
-            while (true) {
-                if (try scanner.isPeekEndValue(take.len)) {
-                    break;
-                }
-                const peek = scanner.reader.peek(take.len + 1) catch |e| switch (e) {
-                    error.EndOfStream => break,
-                    error.ReadFailed => return e,
-                };
-                const last = peek[peek.len - 1];
-                switch (state) {
-                    .sign => {
-                        if (isSign(last)) {
-                            state = .integer;
-                        } else if (isBaseDigit(last)) {
-                            state = .base;
-                            kind = .base_integer;
-                        } else if (isDigit(last)) {
-                            state = .integer;
-                            continue;
-                        } else unreachable;
-                    },
-                    .base => {
-                        if (isBaseChar(last)) {
-                            state = .base_integer;
-                        } else return error.UnexpectedByte;
-                    },
-                    .integer => {
-                        if (isFractionDelimiter(last)) {
-                            state = .fraction;
-                            kind = .float;
-                        } else if (isExponentialDelimiter(last)) {
-                            state = .exponent_sign;
-                            kind = .float;
-                        } else if (!isDigit(last)) {
-                            state = .identifier;
-                            kind = .identifier;
-                        }
-                    },
-                    .base_integer => {
-                        if (!isDigit(last)) {
-                            state = .identifier;
-                            kind = .identifier;
-                        }
-                    },
-                    .fraction => {
-                        if (isExponentialDelimiter(last)) {
-                            state = .exponent_sign;
-                        } else if (!isDigit(last)) break;
-                    },
-                    .exponent_sign => {
-                        if (isSign(last)) {
-                            state = .exponent;
-                        } else if (isDigit(last)) {
-                            state = .exponent;
-                            continue;
-                        } else return error.UnexpectedByte;
-                    },
-                    .exponent => {
-                        if (!isDigit(last)) break;
-                    },
-                    .identifier => {
-                        if (!isIdentifier(last)) break;
-                    },
-                }
-                take = peek;
+            if (byte == '+' or byte == '-') {
+                scanner.reader.toss(1);
             }
 
-            if (state == .sign or state == .base or state == .exponent_sign) {
-                return error.UnexpectedEndOfStream;
+            const determinant = scanner.reader.peekByte() catch |e| return unexpectedEof(e);
+
+            if (determinant == '0') {
+                scanner.reader.toss(1);
+                if (scanner.reader.peekByte()) |base| {
+                    kind, integer_base = switch (base) {
+                        'b' => .{ .base_integer, 2 },
+                        'o' => .{ .base_integer, 8 },
+                        'x' => .{ .base_integer, 16 },
+                        '.', 'e', 'E' => .{ .float, null }, // we allow floats to start with 0. or 0e
+                        else => if (isIdentifier(base)) .{ .identifier, null } else .{ .integer, null },
+                    };
+                    // we expect that if the next byte is not part of a number, it will fall through
+                    // this parsing mechanism, so it's best not to consume it
+                    if (kind != .integer) {
+                        scanner.reader.toss(1);
+                    }
+                } else |e| try ignoreEof(e);
             }
 
-            // this is a cheat to check for incomplete base integers (e.g., '0b')
-            if (state == .base_integer and take.len <= 2) {
+            // we can't allow signs on bin/otc/hex literals
+            if (integer_base != null and (byte == '+' or byte == '-')) {
                 return error.UnexpectedByte;
             }
 
-            scanner.reader.toss(take.len);
+            switch (kind) {
+                .integer => {
+                    _ = try scanner.discardIntegerPart(false);
+                    if (try scanner.discardFraction()) kind = .float;
+                    if (try scanner.discardExponent()) kind = .float;
+                },
+                .base_integer => {
+                    expect_base_digit: {
+                        const expect_digit = scanner.reader.peekByte() catch |e| switch (e) {
+                            error.ReadFailed => return e,
+                            error.EndOfStream => {
+                                kind = .identifier;
+                                break :expect_base_digit;
+                            },
+                        };
+                        switch (expect_digit) {
+                            '0'...'9', 'a'...'f', 'A'...'F' => {},
+                            else => {
+                                kind = .identifier;
+                            },
+                        }
+                    }
+                    _ = try scanner.discardIntegerPart(true);
+                },
+                .float => { // this branch only occurs on 0. or 0e
+                    _ = try scanner.discardIntegerPart(false);
+                    _ = try scanner.discardExponent();
+                },
+                .identifier => {},
+                else => unreachable,
+            }
+
+            if (scanner.reader.peekByte()) |e| {
+                if (isIdentifier(e)) {
+                    kind = .identifier;
+                }
+            } else |e| try ignoreEof(e);
+
+            if (kind == .identifier) {
+                _ = try scanner.takeUntilNotIdentifier();
+            }
 
             return .{
                 .kind = kind,
-                .contents = take,
+                .contents = scanner.reader.buffer[start_seek..scanner.reader.seek],
             };
         },
         '.' => {
@@ -323,19 +347,35 @@ fn takeTokenImpl(scanner: *Scanner) !Token {
             };
         },
         '"' => {
-            // TODO: multiline strings
             scanner.reader.toss(1);
+            if (scanner.reader.peek(2)) |bytes| {
+                if (std.mem.eql(u8, bytes, "\"\"")) {
+                    scanner.reader.toss(2);
+                    return .{
+                        .kind = .string,
+                        .contents = try scanner.takeString(.multiline_normal),
+                    };
+                }
+            } else |e| try ignoreEof(e);
             return .{
                 .kind = .string,
-                .contents = try scanner.takeSingleString(),
+                .contents = try scanner.takeString(.normal),
             };
         },
         '\'' => {
-            // TODO: multiline literal
             scanner.reader.toss(1);
+            if (scanner.reader.peek(2)) |bytes| {
+                if (std.mem.eql(u8, bytes, "''")) {
+                    scanner.reader.toss(2);
+                    return .{
+                        .kind = .literal_string,
+                        .contents = try scanner.takeString(.multiline_literal),
+                    };
+                }
+            } else |e| try ignoreEof(e);
             return .{
                 .kind = .literal_string,
-                .contents = try scanner.takeSingleLiteralString(),
+                .contents = try scanner.takeString(.literal),
             };
         },
         '=' => {
@@ -387,36 +427,74 @@ fn takeTokenImpl(scanner: *Scanner) !Token {
     }
 }
 
-fn takeSingleString(scanner: *Scanner) ![]u8 {
+const StringKind = enum {
+    normal,
+    multiline_normal,
+    literal,
+    multiline_literal,
+};
+
+fn takeString(scanner: *Scanner, kind: StringKind) ![]u8 {
     var take: []u8 = &.{};
-    var escape: bool = false;
-    while (true) {
-        const peek = try scanner.reader.peek(take.len + 1);
-        switch (peek[peek.len - 1]) {
-            '"' => {
-                if (!escape) break;
+    while (scanner.reader.peek(take.len + 1)) |bytes| {
+        switch (bytes[bytes.len - 1]) {
+            0x00...0x08, 0x0b...0x1f, 0x7f => {
+                return error.UnexpectedByte;
             },
-            '\\' => {
-                escape = !escape;
+            0x0a => switch (kind) {
+                .normal, .literal => return error.UnexpectedByte,
+                .multiline_literal, .multiline_normal => {},
             },
-            else => {
-                escape = false;
+            else => {},
+        }
+        take = bytes;
+        // for multi-line strings, the spec allows closing them with 4 or 5 quotes,
+        // in which case the first 2 are part of the string
+        switch (kind) {
+            .normal => if (take[take.len - 1] == '"') {
+                if (take.len > 1 and take[take.len - 2] == '\\') {
+                    continue;
+                }
+                scanner.reader.toss(take.len);
+                take.len -= 1;
+                return take;
+            },
+            .multiline_normal => if (std.mem.endsWith(u8, take, "\"\"\"")) {
+                if (take.len > 3 and take[take.len - 4] == '\\') {
+                    continue;
+                }
+                if (scanner.reader.peek(take.len + 1)) |more_bytes| {
+                    if (more_bytes[more_bytes.len - 1] == '\"') {
+                        continue;
+                    }
+                } else |e| try ignoreEof(e);
+
+                scanner.reader.toss(take.len);
+                take.len -= 3;
+                return take;
+            },
+            .literal => if (take[take.len - 1] == '\'') {
+                scanner.reader.toss(take.len);
+                take.len -= 1;
+                return take;
+            },
+            .multiline_literal => if (std.mem.endsWith(u8, take, "'''")) {
+                if (scanner.reader.peek(take.len + 1)) |more_bytes| {
+                    if (more_bytes[more_bytes.len - 1] == '\'') {
+                        continue;
+                    }
+                } else |e| try ignoreEof(e);
+
+                scanner.reader.toss(take.len);
+                take.len -= 3;
+                return take;
             },
         }
-        take = peek;
-    }
-    scanner.reader.toss(take.len + 1);
-    return take;
-}
-
-fn takeSingleLiteralString(scanner: *Scanner) ![]u8 {
-    const slice = try scanner.reader.takeDelimiterExclusive('\'');
-    _ = scanner.reader.peekByte() catch |e| switch (e) {
+    } else |e| switch (e) {
         error.ReadFailed => return e,
         error.EndOfStream => return error.UnexpectedEndOfStream,
-    };
-    scanner.reader.toss(1);
-    return slice;
+    }
+    return take;
 }
 
 fn takeUntilNotIdentifier(scanner: *Scanner) ![]u8 {
@@ -440,6 +518,61 @@ fn takeUntilNotDigit(scanner: *Scanner) ![]u8 {
     }
     scanner.reader.toss(take.len);
     return take;
+}
+
+// we don't ever really 'discard' it, we just read it directly from the buffer
+// it only has this name because this function does not track the buffer state, so it
+// may refresh the buffer
+fn discardIntegerPart(scanner: *Scanner, base: bool) !bool {
+    var underscore_allowed = false;
+    var num_digits: usize = 0;
+    while (scanner.reader.peekByte()) |digit| : (num_digits += 1) {
+        switch (digit) {
+            '_' => {
+                if (!underscore_allowed) return error.UnexpectedByte;
+                underscore_allowed = false;
+            },
+            '0'...'9' => {
+                underscore_allowed = true;
+            },
+            'a'...'f', 'A'...'F' => {
+                if (!base) break;
+                underscore_allowed = true;
+            },
+            else => break,
+        }
+        scanner.reader.toss(1);
+    } else |e| try ignoreEof(e);
+    if (!underscore_allowed and num_digits > 0) return error.UnexpectedByte;
+    return num_digits > 0;
+}
+
+fn discardFraction(scanner: *Scanner) !bool {
+    if (scanner.reader.peekByte()) |exp| {
+        if (isFractionDelimiter(exp)) {
+            scanner.reader.toss(1);
+            _ = try scanner.discardIntegerPart(false);
+            return true;
+        }
+    } else |e| try ignoreEof(e);
+    return false;
+}
+
+fn discardExponent(scanner: *Scanner) !bool {
+    if (scanner.reader.peekByte()) |exp| {
+        if (isExponentialDelimiter(exp)) {
+            scanner.reader.toss(1);
+            if (scanner.reader.peekByte()) |sign| {
+                if (isSign(sign)) {
+                    scanner.reader.toss(1);
+                }
+            } else |e| try ignoreEof(e);
+
+            _ = try scanner.discardIntegerPart(false);
+            return true;
+        }
+    } else |e| try ignoreEof(e);
+    return false;
 }
 
 fn takeUntilNewline(scanner: *Scanner) ![]u8 {
@@ -721,4 +854,18 @@ test Scanner {
     };
 
     try testAnyScanner(&scanner);
+}
+
+test "Scanner2" {
+    const buf =
+        \\str = ''''That,' she said, 'is still pointless.''''
+    ;
+    var reader: std.Io.Reader = .fixed(buf);
+
+    var scanner: Scanner = .{
+        .vtable = &.{},
+        .reader = &reader,
+    };
+
+    while (try scanner.takeToken()) |_| {}
 }
