@@ -9,12 +9,10 @@ const escape_string = @import("escape_string.zig");
 
 const Parser = @This();
 
-const Error = std.mem.Allocator.Error ||
+pub const Error = std.mem.Allocator.Error ||
     Scanner.Error ||
     error{ EndOfTokenStream, UnexpectedToken, AstError } ||
     error{ WriteFailed, InvalidEscape, InvalidUtf8 };
-
-const DeepKey = std.ArrayListUnmanaged([]const u8);
 
 pub const Value = union(enum) {
     pub const Array = std.ArrayListUnmanaged(Value);
@@ -34,6 +32,20 @@ pub const Value = union(enum) {
     table: Table,
     inline_table: Table,
     implicit_table: Table,
+
+    pub fn anyTableOrNull(self: Value) ?Table {
+        return switch (self) {
+            .table, .inline_table, .implicit_table => |table| table,
+            else => null,
+        };
+    }
+
+    pub fn anyArrayOrNull(self: Value) ?Array {
+        return switch (self) {
+            .array, .array_of_tables => |arr| arr,
+            else => null,
+        };
+    }
 
     pub fn deinitDeep(self: Value, allocator: std.mem.Allocator) void {
         switch (self) {
