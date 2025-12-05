@@ -17,6 +17,8 @@ This parser should be spec compliant.
 - [x] Stringify entire structs and tables
 
 ### Documentation
+Documentation is live at https://edqx.github.io/microwave/
+
 Run `zig build docs` to access local documentation for Microwave. Use your favourite method to serve static sites,
 for example with Python: `python -m http.server` or with NodeJS: `npx serve`.
 
