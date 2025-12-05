@@ -18,12 +18,12 @@ pub const Token = struct {
         ///
         /// https://toml.io/en/v1.0.0#spec
         newline,
-        /// A '#' followed by the rest of the line, not including the newline
+        /// A '#' followed by the rest of the line, not including the newline.
         ///
         /// https://toml.io/en/v1.0.0#comment
         comment,
 
-        /// A combination of A-Z, a-z, _, -, 0-9
+        /// A combination of A-Z, a-z, _, -, 0-9.
         ///
         /// Note that not _all_ keys will be represented by an .identifier token:
         /// - String keys are represented by .string or .literal_string
@@ -31,11 +31,11 @@ pub const Token = struct {
         ///
         /// https://toml.io/en/v1.0.0#keys
         identifier,
-        /// A single '.' used for adding key depth and accessing sub-keys
+        /// A single '.' used for adding key depth and accessing sub-keys.
         ///
         /// https://toml.io/en/v1.0.0#keys
         access,
-        /// A single '=' for separating keys from their values
+        /// A single '=' for separating keys from their values.
         ///
         /// https://toml.io/en/v1.0.0#keyvalue-pair
         equals,
@@ -289,6 +289,7 @@ fn unexpectedEof(err: std.Io.Reader.Error) Error {
     };
 }
 
+/// A table of functions for providing additional information to the scanner.
 vtable: *const VTable = &.{},
 /// The underlying reader that the scanner will attempt to read from.
 ///

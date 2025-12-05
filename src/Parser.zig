@@ -1,3 +1,5 @@
+//! A parser for converting TOML tokens into Zig types.
+
 const std = @import("std");
 
 const Scanner = @import("Scanner.zig");
@@ -9,30 +11,75 @@ const escape_string = @import("escape_string.zig");
 
 const Parser = @This();
 
-pub const Error = std.mem.Allocator.Error ||
+pub const Error =
+    std.mem.Allocator.Error ||
     Scanner.Error ||
     error{ EndOfTokenStream, UnexpectedToken, AstError } ||
     error{ WriteFailed, InvalidEscape, InvalidUtf8 };
 
+/// Represents a TOML value converted into a Zig type.
 pub const Value = union(enum) {
     pub const Array = std.ArrayListUnmanaged(Value);
     pub const Table = std.StringArrayHashMapUnmanaged(Value);
 
+    /// A single-line or multi-line basic or literal string. Escape codes are converted into UTF8-encoded
+    /// bytes as a standard Zig-esque string.
+    ///
+    /// https://toml.io/en/v1.0.0#string
     string: []const u8,
+    /// A boolean value representing `true` or `false` in TOML.
+    ///
+    /// https://toml.io/en/v1.0.0#boolean
     bool: bool,
+    /// A whole number, parsed using Zig's `std.fmt.parseInt` function. Integer base literals
+    /// (those prefixed with `0b`, `0x` or `0o`) are converted into normal integers.
+    ///
+    /// See `integer_string` for integers that are too big to be represented by an `i64`.
+    ///
+    /// https://toml.io/en/v1.0.0#integer
     integer: i64,
+    /// A whole number that cannot be represented by an `i64` and requires custom parsing.
+    ///
+    /// See `integer` for integers that _can_ be represented by an `i64`.
+    ///
+    /// https://toml.io/en/v1.0.0#integer
     integer_string: []const u8,
+    /// A floating point number with precision only up to a standard `double`, parsed with Zig's
+    /// `std.fmt.parseFloat`.
+    ///
+    /// https://toml.io/en/v1.0.0#float
     float: f64,
 
+    /// An RFC-3339-formatted date or time or both, with an optional timezone offset.
+    ///
+    /// https://toml.io/en/v1.0.0#offset-date-time
     datetime: DateTime,
 
+    /// An inline array of values.
+    ///
+    /// https://toml.io/en/v1.0.0#array
     array: Array,
+    /// An array of tables as defined as a root header.
+    ///
+    /// https://toml.io/en/v1.0.0#array-of-tables
     array_of_tables: Array,
 
+    /// A table of values as defined as a root header.
+    ///
+    /// https://toml.io/en/v1.0.0#table
     table: Table,
+    /// An inline table of values.
+    ///
+    /// https://toml.io/en/v1.0.0#inline-table
     inline_table: Table,
+    /// A 'hidden' table that is not explicitly defined in a TOML file, but is
+    /// accessed through using dotted keys
+    ///
+    /// https://toml.io/en/v1.0.0#keys
     implicit_table: Table,
 
+    /// A helper function to get the value of any sort of table, rather than querying `table`,
+    /// `inline_table` and `implicit_table` directly.
     pub fn anyTableOrNull(self: Value) ?Table {
         return switch (self) {
             .table, .inline_table, .implicit_table => |table| table,
@@ -40,6 +87,8 @@ pub const Value = union(enum) {
         };
     }
 
+    /// A helper function to get the value of any sort of array, rather than querying `array`
+    /// and `array_of_tables` directly.
     pub fn anyArrayOrNull(self: Value) ?Array {
         return switch (self) {
             .array, .array_of_tables => |arr| arr,
@@ -47,6 +96,7 @@ pub const Value = union(enum) {
         };
     }
 
+    /// De-allocate all of the data held by this value, recursively.
     pub fn deinitDeep(self: Value, allocator: std.mem.Allocator) void {
         switch (self) {
             .string, .integer_string => |str| {
@@ -69,13 +119,17 @@ pub const Value = union(enum) {
     }
 };
 
+/// De-allocate a `Value.Table` and all of the data it holds, recursively.
 pub fn deinitTable(allocator: std.mem.Allocator, table: Value.Table) void {
     var value: Value = .{ .table = table };
     value.deinitDeep(allocator);
 }
 
-const KeySet = std.StringHashMapUnmanaged(void);
+/// An [interned](https://en.wikipedia.org/wiki/String_interning) set of keys used
+/// by tables initialized by a parser.
+pub const KeySet = std.StringHashMapUnmanaged(void);
 
+/// De-initialize a `KeySet`, including all of the keys it holds.
 pub fn deinitKeySet(allocator: std.mem.Allocator, key_set: KeySet) void {
     var key_set_var = key_set;
     var iter = key_set_var.keyIterator();
@@ -90,15 +144,30 @@ const AccessKind = enum {
     pair,
 };
 
+/// An allocator for all values created by this parser. Best practice is to pass
+/// in an arena here, which makes de-initialization with `deinitTable` or `Value.deinit`
+/// much safer and easier.
 allocator: std.mem.Allocator,
+/// A scanner for the parser to read TOML lexical tokens from.
 scanner: *Scanner,
 
+/// An allocator for [interned](https://en.wikipedia.org/wiki/String_interning) table keys
+/// used in tables initialized by this parser.
 key_allocator: std.mem.Allocator,
+
+/// The set of [interned](https://en.wikipedia.org/wiki/String_interning) table keys
+/// used in tables initialized by this parser.
+///
+/// If the parser is discarded and the value kept, this set is best copied and kept so
+/// that keys can later be de-initialized with `deinitKeySet`.
 key_set: KeySet = .empty,
 
 // we store the last token here for trailing comma detection in arrays- that is,
 // a trailing comma then expects a value, but ] will return UnexpectedToken. catching
 // this error and checking this value should reveal the end of the array
+
+/// The last token that was encountered by this parser. Useful for special handling of
+/// errors such as `Error.UnexpectedToken`, and used internally for accurate parsing.
 last_token: ?Scanner.Token = null,
 
 fn parseBoolIdentifier(slice: []u8) error{UnexpectedToken}!bool {
@@ -107,6 +176,8 @@ fn parseBoolIdentifier(slice: []u8) error{UnexpectedToken}!bool {
     return error.UnexpectedToken;
 }
 
+/// De-initialize this parser. Not necessary to be called in most cases, so long as the `key_set`
+/// is retained and de-initialized with `deinitKeySet` when suitable. Best used in an `errdefer`.
 pub fn deinit(parser: Parser) void {
     deinitKeySet(parser.key_allocator, parser.key_set);
 }
@@ -482,6 +553,7 @@ fn consumeTableDefinition(parser: *Parser, root_table_value: *Value) Error!*Valu
     return put_table_path_result.value_ptr;
 }
 
+/// Parse the root TOML document table. Will scan until end of the token stream.
 pub fn takeDocumentTable(parser: *Parser) !Value.Table {
     var document_table_value: Value = .{ .table = .empty };
     errdefer document_table_value.deinitDeep(parser.allocator);

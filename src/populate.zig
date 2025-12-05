@@ -12,11 +12,31 @@ fn getOptionalChild(T: type) type {
     };
 }
 
-pub fn Populate(Container: type) type {
+/// Populate a Zig value with TOML data.
+///
+/// - `.array`, `.array_of_tables` is mapped to `[]T`
+/// - `.table`, `.implicit_table`, `.inline_table` is mapped to `struct { ... }`
+/// - `.bool` is mapped to `bool`
+/// - `.string` is mapped to `[]const u8`
+/// - `.integer_string` is mapped to `[]const u8`
+/// - `.integer` is mapped to `i64` or `f64`
+/// - `.float` is mapped to `f64`
+/// - `.datetime` is mapped to `DateTime`
+///
+/// See `Parser.Value` for the definitions of these values.
+pub fn Populate(
+    /// The Zig container type to populate.
+    Container: type,
+) type {
     const type_info = @typeInfo(Container);
     return struct {
         pub const Error = error{ IncorrectType, MissingKey };
 
+        /// De-initialize the data in this struct recursively.
+        ///
+        /// This is not a great function to use in your code, as it hides the actual
+        /// allocated data in your struct. It is better to manually de-init and
+        /// de-allocate the data yourself.
         pub fn deinitDeep(allocator: std.mem.Allocator, val: *Container) void {
             if (Container == DateTime) {
                 //
@@ -48,7 +68,13 @@ pub fn Populate(Container: type) type {
             } else @compileError("Cannot de-initialise container of type " ++ @typeName(Container));
         }
 
-        pub fn intoFromValueOwned(allocator: std.mem.Allocator, destination: *Container, value: Parser.Value) !void {
+        /// Populate a Zig type from a parsed TOML value.
+        ///
+        /// This is not guaranteed to be a fully safe and leak-free operation, but in most tested
+        /// cases will be.
+        ///
+        /// Data can be de-initialized with `deinitDeep`.
+        pub fn intoFromValueLeaky(allocator: std.mem.Allocator, destination: *Container, value: Parser.Value) !void {
             if (Container == Parser.Value) {
                 destination.* = try value.dupeRecursive(allocator);
                 return;
@@ -60,7 +86,7 @@ pub fn Populate(Container: type) type {
                         inline for (union_info.fields) |field| {
                             var field_dest: @FieldType(Container, field.name) = undefined;
                             var success = true;
-                            Populate(@FieldType(Container, field.name)).intoFromValueOwned(allocator, &field_dest, value) catch |e| switch (e) {
+                            Populate(@FieldType(Container, field.name)).intoFromValueLeaky(allocator, &field_dest, value) catch |e| switch (e) {
                                 Error.IncorrectType, Error.MissingKey => {
                                     success = false;
                                 },
@@ -76,7 +102,7 @@ pub fn Populate(Container: type) type {
                 },
                 .optional => |optional_info| {
                     destination.* = @as(Container, undefined);
-                    return Populate(optional_info.child).intoFromValueOwned(allocator, &destination.*.?, value);
+                    return Populate(optional_info.child).intoFromValueLeaky(allocator, &destination.*.?, value);
                 },
                 else => {},
             }
@@ -97,7 +123,7 @@ pub fn Populate(Container: type) type {
                     };
                     inline for (type_info.@"struct".fields) |field| {
                         if (table_value.get(field.name)) |child_value| {
-                            try Populate(field.type).intoFromValueOwned(allocator, &@field(destination, field.name), child_value);
+                            try Populate(field.type).intoFromValueLeaky(allocator, &@field(destination, field.name), child_value);
                             field_idx += 1;
                         } else {
                             if (@typeInfo(field.type) != .optional) {
@@ -117,7 +143,7 @@ pub fn Populate(Container: type) type {
                     };
                     for (array_value.items) |inner_value| {
                         var rest: type_info.pointer.child = undefined;
-                        try Populate(type_info.pointer.child).intoFromValueOwned(allocator, &rest, switch (tag) {
+                        try Populate(type_info.pointer.child).intoFromValueLeaky(allocator, &rest, switch (tag) {
                             .array => inner_value,
                             .array_of_tables => inner_value,
                             else => unreachable,
@@ -153,12 +179,44 @@ pub fn Populate(Container: type) type {
             }
         }
 
+        /// Populate a Zig type from a parsed TOML table.
+        ///
+        /// This is not guaranteed to be a fully safe and leak-free operation, but in most tested
+        /// cases will be.
+        ///
+        /// Data can be de-initialized with `deinitDeep`.
         pub fn intoFromTableLeaky(
             allocator: std.mem.Allocator,
             destination: *Container,
             table: Parser.Value.Table,
         ) !void {
-            try intoFromValueOwned(allocator, destination, .{ .table = table });
+            try intoFromValueLeaky(allocator, destination, .{ .table = table });
+        }
+
+        /// Populate a Zig type from a parsed TOML value.
+        ///
+        /// Returns an arena which can be used to de-initialize all allocated data
+        /// in one `std.heap.ArenaAllocator.deinit` call.
+        pub fn intoFromValue(
+            allocator: std.mem.Allocator,
+            destination: *Container,
+            value: Parser.Value,
+        ) !std.heap.ArenaAllocator {
+            var arena: std.heap.ArenaAllocator = .init(allocator);
+            try intoFromValueLeaky(arena.allocator(), destination, value);
+            return arena;
+        }
+
+        /// Populate a Zig type from a parsed TOML table.
+        ///
+        /// Returns an arena which can be used to de-initialize all allocated data
+        /// in one `std.heap.ArenaAllocator.deinit` call.
+        pub fn intoFromTable(
+            allocator: std.mem.Allocator,
+            destination: *Container,
+            table: Parser.Value.Table,
+        ) !std.heap.ArenaAllocator {
+            return try intoFromValue(allocator, destination, .{ .table = table });
         }
     };
 }
@@ -198,7 +256,7 @@ test Populate {
     defer doc.deinit();
 
     var test_struct: TestDog = undefined;
-    try Populate(TestDog).intoFromValueOwned(std.testing.allocator, &test_struct, .{ .table = doc.table });
+    try Populate(TestDog).intoFromTableLeaky(std.testing.allocator, &test_struct, doc.table);
     defer Populate(TestDog).deinitDeep(std.testing.allocator, &test_struct);
 
     try std.testing.expectEqualSlices(u8, "Barney", test_struct.name);
