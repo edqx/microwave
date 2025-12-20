@@ -543,10 +543,10 @@ fn takeString(scanner: *Scanner, kind: StringKind) ![]u8 {
     var take: []u8 = &.{};
     while (scanner.reader.peek(take.len + 1)) |bytes| {
         switch (bytes[bytes.len - 1]) {
-            0x00...0x08, 0x0b...0x1f, 0x7f => {
+            0x00...0x08, 0x0b...0x0c, 0x0e...0x1f, 0x7f => {
                 return error.UnexpectedByte;
             },
-            0x0a => switch (kind) {
+            0x0a, 0x0d => switch (kind) {
                 .normal, .literal => return error.UnexpectedByte,
                 .multiline_literal, .multiline_normal => {},
             },
