@@ -125,11 +125,10 @@ pub fn Populate(
                         if (table_value.get(field.name)) |child_value| {
                             try Populate(field.type).intoFromValueLeaky(allocator, &@field(destination, field.name), child_value);
                             field_idx += 1;
+                        } else if (field.defaultValue()) |default_value| {
+                            @field(destination, field.name) = default_value;
                         } else {
-                            if (@typeInfo(field.type) != .optional) {
-                                return Error.MissingKey;
-                            }
-                            @field(destination, field.name) = null;
+                            return error.MissingKey;
                         }
                     }
                 },
@@ -224,7 +223,7 @@ pub fn Populate(
 const TestDog = struct {
     const Friend = struct {
         name: []const u8,
-        met_date: ?DateTime,
+        met_date: ?DateTime = null,
     };
 
     name: []const u8,
